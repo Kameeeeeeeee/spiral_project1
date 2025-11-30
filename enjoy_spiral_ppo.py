@@ -8,13 +8,14 @@ from spiral_env import SpiralTentacle2TEnv
 def main():
     env = SpiralTentacle2TEnv(
         render_mode="human",
-        num_links=10,
-        link_length=0.05,
-        link_radius=0.01,
+        num_links=12,
+        link_length=0.04,
+        base_radius=0.02,
+        tip_radius=0.006,
         max_episode_steps=1000,
     )
 
-    model = PPO.load("ppo_spiral_2tendons")
+    model = PPO.load("ppo_spiral_2tendons_tapered")
 
     obs, _ = env.reset()
 

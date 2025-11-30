@@ -2,11 +2,13 @@
 
 def generate_spiral_tentacle_xml(
     num_links: int = 10,
+    base_radius: float = 0.02,   # радиус у основания
+    tip_radius: float = 0.006,   # радиус на кончике
     link_length: float = 0.05,
-    link_radius: float = 0.01,
 ) -> str:
     """
     Щупальце из num_links звеньев, лежит горизонтально вдоль оси X на полу.
+    Радиус звеньев плавно уменьшается от base_radius до tip_radius.
     Два троса идут слева и справа (по оси Y), суставы крутятся вокруг оси Z,
     так что щупальце может изгибаться только влево-вправо.
 
@@ -14,7 +16,8 @@ def generate_spiral_tentacle_xml(
     """
 
     total_length = num_links * link_length
-    base_z = link_radius  # чтобы капсулы лежали на плоскости z=0
+    # высота основания: по самому толстому радиусу
+    base_z = base_radius
 
     xml_parts = []
 
@@ -23,9 +26,7 @@ def generate_spiral_tentacle_xml(
     xml_parts.append('')
     xml_parts.append('  <default>')
     xml_parts.append('    <joint limited="true" range="-120 120" damping="0.05"/>')
-    xml_parts.append(
-        f'    <geom type="capsule" size="{link_radius} {link_length/2}" density="1000"/>'
-    )
+    # geom без размера - зададим size индивидуально для каждого звена
     xml_parts.append('  </default>')
     xml_parts.append('')
     xml_parts.append('  <worldbody>')
@@ -41,27 +42,38 @@ def generate_spiral_tentacle_xml(
         site_left_name = f"site_left_{i}"
         site_right_name = f"site_right_{i}"
 
-        # каждое следующее звено смещено на link_length по X
+        # линейная интерполяция радиуса от основания к кончику
+        if num_links > 1:
+            t = i / (num_links - 1)
+        else:
+            t = 0.0
+        radius_i = (1 - t) * base_radius + t * tip_radius
+
         xml_parts.append(
             f'      <body name="{body_name}" pos="{link_length} 0 0">'
         )
-        # сустав вращает вокруг оси Z, так что движение в плоскости XY
+        # сустав вокруг оси Z
         xml_parts.append(
             f'        <joint name="{joint_name}" type="hinge" axis="0 0 1" pos="{-link_length/2} 0 0"/>'
         )
-        # капсула вдоль X
+        # капсула вдоль X с индивидуальным радиусом
         xml_parts.append(
-            f'        <geom name="{geom_name}" fromto="{-link_length/2} 0 0 {link_length/2} 0 0"/>'
+            f'        <geom name="{geom_name}" type="capsule" '
+            f'size="{radius_i} {link_length/2}" '
+            f'fromto="{-link_length/2} 0 0 {link_length/2} 0 0" '
+            f'density="1000"/>'
         )
-        # точки для тросов слева и справа по Y, на конце звена
+        # точки для тросов слева/справа по Y на конце звена
         xml_parts.append(
-            f'        <site name="{site_left_name}" pos="{link_length/2} {link_radius} 0" size="{link_radius/2}" rgba="1 0 0 1"/>'
+            f'        <site name="{site_left_name}" '
+            f'pos="{link_length/2} {radius_i} 0" size="{radius_i/2}" rgba="1 0 0 1"/>'
         )
         xml_parts.append(
-            f'        <site name="{site_right_name}" pos="{link_length/2} {-link_radius} 0" size="{link_radius/2}" rgba="0 0 1 1"/>'
+            f'        <site name="{site_right_name}" '
+            f'pos="{link_length/2} {-radius_i} 0" size="{radius_i/2}" rgba="0 0 1 1"/>'
         )
 
-    # закрываем body
+    # закрываем вложенные body
     for _ in range(num_links):
         xml_parts.append('      </body>')
 
@@ -72,14 +84,15 @@ def generate_spiral_tentacle_xml(
         '    <geom name="floor" type="plane" size="1 1 0.1" pos="0 0 0" rgba="0.8 0.8 0.8 1"/>'
     )
 
-    # мяч перед концом щупальца, на той же высоте (центр на z = base_z)
+    # мяч перед концом щупальца, на том же уровне (используем радиус основания)
     ball_x = total_length + 0.05
+    ball_radius = base_radius * 0.8  # чуть меньше толщины у основания
     xml_parts.append(
         f'    <body name="ball" pos="{ball_x} 0 {base_z}">'
     )
     xml_parts.append('      <joint name="ball_free" type="free"/>')
     xml_parts.append(
-        f'      <geom name="ball_geom" type="sphere" size="{link_radius}" '
+        f'      <geom name="ball_geom" type="sphere" size="{ball_radius}" '
         'density="500" friction="1 0.1 0.01" rgba="0 1 0 1"/>'
     )
     xml_parts.append('    </body>')

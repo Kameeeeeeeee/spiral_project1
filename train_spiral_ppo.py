@@ -7,16 +7,15 @@ from spiral_env import SpiralTentacle2TEnv
 
 
 if __name__ == "__main__":
-    # параметры среды
     env_kwargs = dict(
         render_mode=None,
-        num_links=10,
-        link_length=0.05,
-        link_radius=0.01,
+        num_links=12,        # можно чуть больше звеньев для гибкости
+        link_length=0.04,
+        base_radius=0.02,
+        tip_radius=0.006,
         max_episode_steps=300,
     )
 
-    # количество параллельных окружений
     num_envs = 4
 
     env = make_vec_env(
@@ -33,13 +32,14 @@ if __name__ == "__main__":
         batch_size=256,
         gamma=0.99,
         learning_rate=3e-4,
+        ent_coef=0.01,             # поощрение исследования
         tensorboard_log="./tensorboard_spiral/",
     )
 
     total_timesteps = 500_000
     model.learn(total_timesteps=total_timesteps)
 
-    model_path = "ppo_spiral_2tendons"
+    model_path = "ppo_spiral_2tendons_tapered"
     model.save(model_path)
     print(f"Saved model to {model_path}")
 

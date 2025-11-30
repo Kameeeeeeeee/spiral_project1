@@ -12,13 +12,14 @@ class SpiralTentacle2TEnv(gym.Env):
     Щупальце с двумя тросами (левый/правый) + мяч для хватания.
 
     Задача:
-    - подтянуть мяч к основанию щупальца (base) и удержать неподвижным.
+      - подтянуть мяч к основанию щупальца (base) и удержать неподвижным.
 
     Reward:
-    - shaping: -dist(ball_xy, base_xy)
-    - +0.5 за контакт мяча (с любым объектом, чаще всего с щупальцем)
-    - +5, если мяч близко к базе и почти неподвижен N шагов подряд
-    - -0.01 * ||action||^2 за энергию
+      - -dist(ball_xy, base_xy)
+      - -0.5 * dist(tip, ball)
+      - +0.5 за контакт мяча с щупальцем
+      - +5 при устойчивом захвате (рядом с базой и почти без скорости)
+      - -0.001 * ||action||^2 за энергию
     """
 
     metadata = {"render_modes": ["human"], "render_fps": 60}
@@ -28,25 +29,27 @@ class SpiralTentacle2TEnv(gym.Env):
         render_mode=None,
         num_links: int = 10,
         link_length: float = 0.05,
-        link_radius: float = 0.01,
+        base_radius: float = 0.02,
+        tip_radius: float = 0.006,
         max_episode_steps: int = 300,
     ):
         super().__init__()
 
         self.num_links = num_links
         self.link_length = link_length
-        self.link_radius = link_radius
+        self.base_radius = base_radius
+        self.tip_radius = tip_radius
         self.max_episode_steps = max_episode_steps
 
-        # общая длина щупальца - будем ограничивать радиус спавна мяча
+        # общая длина щупальца - нужна для радиуса спавна мяча
         self.total_length = num_links * link_length
-
 
         # Генерируем MJCF строку и создаем модель
         xml = generate_spiral_tentacle_xml(
             num_links=num_links,
+            base_radius=base_radius,
+            tip_radius=tip_radius,
             link_length=link_length,
-            link_radius=link_radius,
         )
         self.model = mujoco.MjModel.from_xml_string(xml)
         self.data = mujoco.MjData(self.model)
@@ -89,7 +92,7 @@ class SpiralTentacle2TEnv(gym.Env):
         self.hold_steps = 0
         self.required_hold_steps = 20
 
-        # Порог по расстоянию и скорости для "захвата"
+        # Пороги для "захвата"
         self.grasp_dist_threshold = 0.03
         self.grasp_speed_threshold = 0.05
 
@@ -109,7 +112,7 @@ class SpiralTentacle2TEnv(gym.Env):
 
     def _ball_in_contact_with_tentacle(self):
         """
-        Проверяем, есть ли контакт мяча с щупальцем (а не только с полом).
+        Есть ли контакт мяча с чем-то, кроме пола (обычно со звеньями).
         """
         for i in range(self.data.ncon):
             c = self.data.contact[i]
@@ -128,47 +131,38 @@ class SpiralTentacle2TEnv(gym.Env):
         return np.concatenate([qpos, qvel, tip, ball, rel]).astype(np.float32)
 
     def _compute_reward(self, action):
-        base_pos = self._base_pos()
-        ball_pos = self._ball_pos()
         tip_pos = self._tip_pos()
+        ball_pos = self._ball_pos()
 
-        # расстояния
-        dist_ball_base_xy = np.linalg.norm(ball_pos[:2] - base_pos[:2])
+        # расстояние кончика до мяча (главный сигнал)
         dist_tip_ball = np.linalg.norm(tip_pos - ball_pos)
 
-        # 1) хотим, чтобы мяч был у базы (как раньше)
-        reward = - dist_ball_base_xy
+        # 1) shaping: чем ближе кончик к мячу, тем лучше
+        reward = -dist_tip_ball
 
-        # 2) хотим, чтобы кончик тянулся к мячу
-        #    это дает градиент даже до контакта
-        reward += -0.5 * dist_tip_ball   # коэффициент 0.5 можно потом подкрутить
-
-        # 3) контакт мяча с щупальцем (но не с полом)
+        # 2) бонус за контакт мяча с щупальцем (не с полом)
         if self._ball_in_contact_with_tentacle():
-            reward += 0.5
+            reward += 1.0
 
-        # 4) "успешный захват": мяч рядом с базой и почти неподвижен
+        # 3) успешный захват:
+        # мяч рядом с кончиком и почти не двигается
         ball_linvel = self.data.cvel[self.ball_body_id, 3:]
         speed = float(np.linalg.norm(ball_linvel))
 
-        if (
-            dist_ball_base_xy < self.grasp_dist_threshold
-            and speed < self.grasp_speed_threshold
-        ):
+        if dist_tip_ball < 0.05 and speed < self.grasp_speed_threshold:
             self.hold_steps += 1
         else:
             self.hold_steps = 0
 
         success = self.hold_steps >= self.required_hold_steps
         if success:
-            reward += 5.0
+            reward += 10.0
 
-        # 5) штраф за энергию - сделаем его ПОМЕНЬШЕ,
-        #    чтобы агент не боялся исследовать пространство
+        # 4) небольшой штраф за энергию, чтобы не сильно мешал исследованию
         reward -= 0.001 * float(np.sum(np.square(action)))
 
-        return float(reward), success, dist_ball_base_xy, speed
-
+        # для логов можно вернуть dist_tip_ball, speed
+        return float(reward), success, dist_tip_ball, speed
 
     # --------- API Gymnasium ---------
 
@@ -181,25 +175,24 @@ class SpiralTentacle2TEnv(gym.Env):
         # небольшой шум по положению звеньев
         self.data.qpos[:] += 0.01 * self.np_random.normal(size=self.qpos_n)
 
-        # позиция базы (после reset она уже в нужном месте)
+        # нужно актуализировать позицию base после reset
         mujoco.mj_forward(self.model, self.data)
         base_pos = self._base_pos()
         base_xy = base_pos[:2]
         base_z = base_pos[2]
 
-        # радиус достижимости (берем чуть меньше полной длины,
-        # чтобы не ставить шар прямо на границу)
-        min_r = 0.3 * self.total_length   # не слишком близко
-        max_r = 0.8 * self.total_length   # не дальше 80 % длины
+        # радиус спавна: внутри достижимого круга
+        min_r = 0.6 * self.total_length
+        max_r = 0.9 * self.total_length
 
-        # выбираем случайное положение мяча в секторе перед щупальцем
-        # угол -45..+45 градусов
+
+        # сектор впереди: -45..+45 градусов
         r = self.np_random.uniform(min_r, max_r)
         theta = self.np_random.uniform(-np.pi / 4, np.pi / 4)
 
         x = base_xy[0] + r * np.cos(theta)
         y = base_xy[1] + r * np.sin(theta)
-        z = base_z  # тот же уровень, что и щупальце
+        z = base_z
 
         ball_pos = np.array([x, y, z], dtype=float)
 
@@ -212,27 +205,24 @@ class SpiralTentacle2TEnv(gym.Env):
         obs = self._get_obs()
         return obs, {}
 
-
     def step(self, action):
         self.step_counter += 1
 
-        # клипуем действие
         action = np.clip(action, -1.0, 1.0)
         self.data.ctrl[:] = action
 
-        # несколько внутренних шагов симуляции
         for _ in range(self.substeps):
             mujoco.mj_step(self.model, self.data)
 
         obs = self._get_obs()
-        reward, success, dist_xy, speed = self._compute_reward(action)
+        reward, success, dist_val, speed = self._compute_reward(action)
 
         terminated = success
         truncated = self.step_counter >= self.max_episode_steps
 
         info = {
             "success": success,
-            "dist_ball_base_xy": dist_xy,
+            "dist_tip_ball": dist_val,
             "ball_speed": speed,
             "hold_steps": self.hold_steps,
         }
