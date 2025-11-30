@@ -5,32 +5,55 @@ import numpy as np
 import mujoco
 import mujoco.viewer
 
-from generate_spiral_xml import generate_spiral_tentacle_xml
+from spiral_env import SpiralTentacle2TEnv
 
 
 def main():
-    # Генерируем модель на 10 звеньев
-    xml = generate_spiral_tentacle_xml(num_links=10)
-    model = mujoco.MjModel.from_xml_string(xml)
-    data = mujoco.MjData(model)
+    # создаем среду
+    env = SpiralTentacle2TEnv(
+        render_mode=None,
+        num_links=24,
+        total_length=0.45,
+        base_radius=0.02,
+        tip_radius=0.006,
+        max_episode_steps=10_000,
+    )
 
-    # Параметры сигнала
-    amp = 0.5
-    freq = 0.3  # Гц
+    model = env.model
+    data = env.data
 
-    with mujoco.viewer.launch_passive(model, data) as v:
-        t0 = time.time()
-        while v.is_running():
+    # начальное состояние
+    obs, _ = env.reset()
+
+    print("Открываю MuJoCo viewer для дебага щупальца.")
+    print("Щупальце будет автоматически шевелиться по синусам.")
+    print("Закрыть окно - просто закрой окно viewer.")
+
+    t0 = time.time()
+
+    # пассивный viewer - мы сами двигаем симуляцию
+    with mujoco.viewer.launch_passive(model, data) as viewer:
+        while viewer.is_running():
             t = time.time() - t0
-            # два мотора: левый и правый
-            left = amp * np.sin(2 * np.pi * freq * t)
-            right = amp * np.sin(2 * np.pi * freq * t + np.pi)
 
-            data.ctrl[0] = left
-            data.ctrl[1] = right
+            # простое тестовое действие - синусные колебания тросов
+            # левый и правый трос двигаются с небольшой амплитудой
+            left = 0.5 * np.sin(0.5 * t)
+            right = 0.5 * np.sin(0.5 * t + np.pi / 2)
 
-            mujoco.mj_step(model, data)
-            v.sync()
+            action = np.array([left, right], dtype=np.float32)
+
+            obs, reward, terminated, truncated, info = env.step(action)
+
+            if terminated or truncated:
+                obs, _ = env.reset()
+                t0 = time.time()
+
+            # обновляем картинку
+            viewer.sync()
+
+            # маленькая пауза чтобы не грузить CPU
+            time.sleep(0.01)
 
 
 if __name__ == "__main__":
