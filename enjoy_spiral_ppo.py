@@ -11,7 +11,7 @@ def main():
         num_links=10,
         link_length=0.05,
         link_radius=0.01,
-        max_episode_steps=1300,
+        max_episode_steps=1000,
     )
 
     model = PPO.load("ppo_spiral_2tendons")

@@ -38,6 +38,10 @@ class SpiralTentacle2TEnv(gym.Env):
         self.link_radius = link_radius
         self.max_episode_steps = max_episode_steps
 
+        # общая длина щупальца - будем ограничивать радиус спавна мяча
+        self.total_length = num_links * link_length
+
+
         # Генерируем MJCF строку и создаем модель
         xml = generate_spiral_tentacle_xml(
             num_links=num_links,
@@ -126,23 +130,31 @@ class SpiralTentacle2TEnv(gym.Env):
     def _compute_reward(self, action):
         base_pos = self._base_pos()
         ball_pos = self._ball_pos()
+        tip_pos = self._tip_pos()
 
-        # расстояние в плоскости XY от мяча до базы
-        dist_xy = np.linalg.norm(ball_pos[:2] - base_pos[:2])
+        # расстояния
+        dist_ball_base_xy = np.linalg.norm(ball_pos[:2] - base_pos[:2])
+        dist_tip_ball = np.linalg.norm(tip_pos - ball_pos)
 
-        # 1) shaping - хотим, чтобы мяч был у базы
-        reward = -dist_xy
+        # 1) хотим, чтобы мяч был у базы (как раньше)
+        reward = - dist_ball_base_xy
 
-        # 2) контакт мяча с щупальцем
+        # 2) хотим, чтобы кончик тянулся к мячу
+        #    это дает градиент даже до контакта
+        reward += -0.5 * dist_tip_ball   # коэффициент 0.5 можно потом подкрутить
+
+        # 3) контакт мяча с щупальцем (но не с полом)
         if self._ball_in_contact_with_tentacle():
             reward += 0.5
 
-        # 3) проверяем "успешный захват": мяч рядом и почти не двигается
-        # линейная скорость тела (data.cvel: (nbody, 6))
+        # 4) "успешный захват": мяч рядом с базой и почти неподвижен
         ball_linvel = self.data.cvel[self.ball_body_id, 3:]
         speed = float(np.linalg.norm(ball_linvel))
 
-        if dist_xy < self.grasp_dist_threshold and speed < self.grasp_speed_threshold:
+        if (
+            dist_ball_base_xy < self.grasp_dist_threshold
+            and speed < self.grasp_speed_threshold
+        ):
             self.hold_steps += 1
         else:
             self.hold_steps = 0
@@ -151,10 +163,12 @@ class SpiralTentacle2TEnv(gym.Env):
         if success:
             reward += 5.0
 
-        # штраф за энергию управления
-        reward -= 0.01 * float(np.sum(np.square(action)))
+        # 5) штраф за энергию - сделаем его ПОМЕНЬШЕ,
+        #    чтобы агент не боялся исследовать пространство
+        reward -= 0.001 * float(np.sum(np.square(action)))
 
-        return float(reward), success, dist_xy, speed
+        return float(reward), success, dist_ball_base_xy, speed
+
 
     # --------- API Gymnasium ---------
 
@@ -164,31 +178,40 @@ class SpiralTentacle2TEnv(gym.Env):
         self.step_counter = 0
         self.hold_steps = 0
 
-        # Небольшой шум по положению звеньев
+        # небольшой шум по положению звеньев
         self.data.qpos[:] += 0.01 * self.np_random.normal(size=self.qpos_n)
 
-        # исходная позиция мяча из модели
-        base_ball_pos = self.data.qpos[
-            self.ball_qpos_adr : self.ball_qpos_adr + 3
-        ].copy()
+        # позиция базы (после reset она уже в нужном месте)
+        mujoco.mj_forward(self.model, self.data)
+        base_pos = self._base_pos()
+        base_xy = base_pos[:2]
+        base_z = base_pos[2]
 
-        # случайное смещение мяча в XY (чтобы не всегда был идеально по центру)
-        jitter = np.array(
-            [
-                0.02 * self.np_random.uniform(-1, 1),
-                0.04 * self.np_random.uniform(-1, 1),
-                0.0,
-            ]
-        )
-        new_ball_pos = base_ball_pos + jitter
-        self.data.qpos[self.ball_qpos_adr : self.ball_qpos_adr + 3] = new_ball_pos
+        # радиус достижимости (берем чуть меньше полной длины,
+        # чтобы не ставить шар прямо на границу)
+        min_r = 0.3 * self.total_length   # не слишком близко
+        max_r = 0.8 * self.total_length   # не дальше 80 % длины
 
+        # выбираем случайное положение мяча в секторе перед щупальцем
+        # угол -45..+45 градусов
+        r = self.np_random.uniform(min_r, max_r)
+        theta = self.np_random.uniform(-np.pi / 4, np.pi / 4)
+
+        x = base_xy[0] + r * np.cos(theta)
+        y = base_xy[1] + r * np.sin(theta)
+        z = base_z  # тот же уровень, что и щупальце
+
+        ball_pos = np.array([x, y, z], dtype=float)
+
+        # записываем позицию мяча в qpos
+        self.data.qpos[self.ball_qpos_adr : self.ball_qpos_adr + 3] = ball_pos
         # обнуляем скорости мяча
         self.data.qvel[self.ball_dof_adr : self.ball_dof_adr + 6] = 0.0
 
         mujoco.mj_forward(self.model, self.data)
         obs = self._get_obs()
         return obs, {}
+
 
     def step(self, action):
         self.step_counter += 1
