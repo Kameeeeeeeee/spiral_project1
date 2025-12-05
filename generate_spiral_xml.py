@@ -1,168 +1,182 @@
 # generate_spiral_xml.py
 #
-# Использует hex_base.obj и создает 24 звена-hex,
-# которые сужаются и укорачиваются к концу щупальца.
+# Генерирует MJCF-модель щупальца:
+# - звенья: mesh hex_base.obj, сужающиеся к концу
+# - привод: два троса (tendon_left, tendon_right) и два мотора
+
+from __future__ import annotations
+from typing import List
+
+
+def _linspace(start: float, end: float, n: int) -> List[float]:
+    if n <= 1:
+        return [start]
+    step = (end - start) / (n - 1)
+    return [start + i * step for i in range(n)]
+
 
 def generate_spiral_tentacle_xml(
     num_links: int = 24,
-    base_radius: float = 0.02,    # половина ширины у основания (по Y)
-    tip_radius: float = 0.006,    # половина ширины на конце
-    total_length: float = 0.45,   # общая длина щупальца (по X)
-    thickness: float = 0.01,      # толщина по Z
+    total_length: float = 0.45,
+    base_radius: float = 0.02,
+    tip_radius: float = 0.006,
+    thickness: float = 0.01,
+    link_density: float = 300.0,
+    motor_gear: float = 3.0,
+    joint_damping: float = 0.4,
+    joint_frictionloss: float = 0.02,
 ) -> str:
     """
-    Щупальце из num_links звеньев.
-    Каждое звено - лежачий шестиугольник (mesh hex_base)
-    с кончиками по оси X и шириной по оси Y.
-    Звенья уменьшаются к концу. Движение только в горизонтали.
+    Щупальце из шестиугольных звеньев, приводимая в движение двумя тросами.
+    Вдоль левого и правого края проходят spatial-tendon, к которым привязаны моторы.
     """
 
-    # коэффициенты сужения: от 1 до 0.4
-    scales = []
-    for i in range(num_links):
-        if num_links > 1:
-            t = i / (num_links - 1)
-        else:
-            t = 0.0
-        s = 1.0 - 0.6 * t
-        scales.append(s)
+    # относительные длины звеньев вдоль щупальца
+    rel_lengths = _linspace(1.0, 0.6, num_links)
+    length_sum = sum(rel_lengths)
+    base_len = total_length / length_sum
+    link_lengths = [base_len * r for r in rel_lengths]
 
-    scale_sum = sum(scales)
-    base_length = total_length / scale_sum
-    link_lengths = [base_length * s for s in scales]
+    # ширина (по Y) плавно сужается
+    widths = _linspace(base_radius * 2.0, tip_radius * 2.0, num_links)
 
-    widths = []
-    for i in range(num_links):
-        if num_links > 1:
-            t = i / (num_links - 1)
-        else:
-            t = 0.0
-        radius_i = (1 - t) * base_radius + t * tip_radius
-        widths.append(2.0 * radius_i)
+    xml: list[str] = []
 
-    base_z = thickness * 0.5
-
-    xml = []
     xml.append('<mujoco model="spiral_tentacle_hex">')
-    xml.append('  <option timestep="0.002" gravity="0 0 0"/>')
-    xml.append('')
+    xml.append('  <option timestep="0.002" gravity="0 0 -9.81"/>')
+    xml.append('  <default>')
+    xml.append(
+        '    <joint damping="{:.4f}" frictionloss="{:.4f}"/>'.format(
+            joint_damping, joint_frictionloss
+        )
+    )
+    xml.append(
+        '    <geom condim="3" friction="0.8 0.1 0.01" rgba="0.9 0.9 0.9 1"/>'
+    )
+    xml.append('  </default>')
+
+    # asset: один базовый mesh и по mesh-asset на звено с нужным scale
     xml.append('  <asset>')
-    # для каждого звена - своя mesh с нужным scale,
-    # но все используют один и тот же файл hex_base.obj
+    xml.append('    <mesh name="hex_base" file="hex_base.obj"/>')
     for i in range(num_links):
         L = link_lengths[i]
         W = widths[i]
-        T = thickness
         xml.append(
             f'    <mesh name="hex_{i}" file="hex_base.obj" '
-            f'scale="{L:.6f} {W:.6f} {T:.6f}"/>'
+            f'scale="{L:.6f} {W:.6f} {thickness:.6f}"/>'
         )
     xml.append('  </asset>')
-    xml.append('')
+
     xml.append('  <worldbody>')
 
-    # база
-    xml.append(f'    <body name="base" pos="0 0 {base_z:.6f}">')
-
-    for i in range(num_links):
-        body_name = f"link_{i}"
-        joint_name = f"joint_{i}"
-        geom_name = f"geom_{i}"
-        site_left_name = f"site_left_{i}"
-        site_right_name = f"site_right_{i}"
-
-        L = link_lengths[i]
-        W = widths[i]
-        half_L = L / 2.0
-        half_W = W / 2.0
-
-        # каждое тело смещаем на L относительно предыдущего
-        xml.append(f'      <body name="{body_name}" pos="{L:.6f} 0 0">')
-
-        # сустав вокруг Z, опорная точка примерно между звеньями
-        xml.append(
-            f'        <joint name="{joint_name}" type="hinge" axis="0 0 1" '
-            f'pos="{-half_L:.6f} 0 0" range="-120 120" damping="0.05"/>'
-        )
-
-        # геом - шестиугольник, уже "лежит" вдоль X, узкая к узкой
-        # hex_base имеет длину 1 от кончика до кончика,
-        # scale по X = L, по Y = W, по Z = thickness
-        xml.append(
-            f'        <geom name="{geom_name}" type="mesh" mesh="hex_{i}" '
-            f'pos="0 0 0" density="1000" rgba="0.9 0.9 0.9 1"/>'
-        )
-
-        # сайты для тросов по боковым кромкам (левый/правый)
-        xml.append(
-            f'        <site name="{site_left_name}" '
-            f'pos="{half_L:.6f} {half_W:.6f} 0" size="{half_W/4:.6f}" '
-            f'rgba="1 0 0 1"/>'
-        )
-        xml.append(
-            f'        <site name="{site_right_name}" '
-            f'pos="{half_L:.6f} {-half_W:.6f} 0" size="{half_W/4:.6f}" '
-            f'rgba="0 0 1 1"/>'
-        )
-
-    # закрываем все link-body
-    for _ in range(num_links):
-        xml.append('      </body>')
-
-    xml.append('    </body> <!-- end base -->')
-
-    # "пол" далеко снизу
+    # пол
     xml.append(
-        '    <geom name="floor" type="plane" size="5 5 0.1" '
-        'pos="0 0 -1" rgba="0.8 0.8 0.8 1"/>'
+        '    <geom name="floor" type="plane" size="2 2 0.1" '
+        'rgba="0.8 0.8 0.8 1"/>'
     )
 
-    # мяч перед концом щупальца
-    ball_x = total_length + 0.05
-    ball_radius = base_radius * 0.7
-    xml.append(f'    <body name="ball" pos="{ball_x:.6f} 0 {base_z:.6f}">')
-    xml.append('      <joint name="ball_free" type="free"/>')
+    # база
+    base_z = thickness * 1.5
+    xml.append(f'    <body name="base" pos="0 0 {base_z:.6f}">')
+    xml.append('      <geom type="sphere" size="0.03" rgba="0.3 0.3 0.3 1"/>')
+    # точки крепления тросов на базе
+    xml.append(f'      <site name="tendon_left_base"  pos="0 { base_radius:.6f} 0" size="0.002"/>')
+    xml.append(f'      <site name="tendon_right_base" pos="0 {-base_radius:.6f} 0" size="0.002"/>')
+
+    # цепочка звеньев (каждое звено - вложенный body)
+    indent = "      "
+    for i in range(num_links):
+        L = link_lengths[i]
+        W = widths[i]
+        body_name = f"link_{i}"
+        joint_name = f"joint_{i}"
+        geom_name = f"link_geom_{i}"
+        mesh_name = f"hex_{i}"
+
+        # смещение тела относительно родителя:
+        # первое звено сидит в базе, остальные - на конце предыдущего
+        if i == 0:
+            pos_str = "0 0 0"
+        else:
+            prev_L = link_lengths[i - 1]
+            pos_str = f"{prev_L:.6f} 0 0"
+
+        xml.append(f'{indent}<body name="{body_name}" pos="{pos_str}">')
+        xml.append(
+            f'{indent}  <joint name="{joint_name}" type="hinge" axis="0 0 1" '
+            f'pos="0 0 0" range="-120 120"/>'
+        )
+        xml.append(
+            f'{indent}  <geom name="{geom_name}" type="mesh" mesh="{mesh_name}" '
+            f'pos="0 0 0" density="{link_density:.1f}"/>'
+        )
+        # сайты для тросов по левому/правому краю звена (примерно по середине длины)
+        half_L = 0.5 * L
+        y_off = 0.5 * W
+        xml.append(
+            f'{indent}  <site name="tendon_left_{i}"  pos="{half_L:.6f} { y_off:.6f} 0" size="0.002"/>'
+        )
+        xml.append(
+            f'{indent}  <site name="tendon_right_{i}" pos="{half_L:.6f} {-y_off:.6f} 0" size="0.002"/>'
+        )
+
+        indent += "  "
+
+    # закрываем body звеньев и базу
+    for _ in range(num_links):
+        indent = indent[:-2]
+        xml.append(f'{indent}</body>')
+    xml.append('    </body>  <!-- base -->')
+
+    # шар-объект: free joint, позиция тут только начальная,
+    # реальный спавн происходит в среде
+    total_len = sum(link_lengths)
+    obj_r = base_radius * 0.7
     xml.append(
-        f'      <geom name="ball_geom" type="sphere" size="{ball_radius:.6f}" '
-        'density="300" friction="1 0.1 0.01" rgba="0 1 0 1"/>'
+        f'    <body name="obj_sphere_hi" pos="{total_len * 0.7:.6f} 0 {obj_r:.6f}">'
+    )
+    xml.append('      <joint name="obj_sphere_hi_free" type="free"/>')
+    xml.append(
+        f'      <geom name="obj_sphere_hi_geom" type="sphere" size="{obj_r:.6f}" '
+        'density="300" friction="1.2 0.3 0.02" rgba="0 1 0 1"/>'
     )
     xml.append('    </body>')
 
     xml.append('  </worldbody>')
-    xml.append('')
 
     # тросы
     xml.append('  <tendon>')
-    xml.append('    <spatial name="tendon_left" width="0.001">')
+    # левый
+    xml.append('    <spatial name="tendon_left" limited="false" width="0.002">')
+    xml.append('      <site site="tendon_left_base"/>')
     for i in range(num_links):
-        xml.append(f'      <site site="site_left_{i}"/>')
+        xml.append(f'      <site site="tendon_left_{i}"/>')
     xml.append('    </spatial>')
-    xml.append('    <spatial name="tendon_right" width="0.001">')
+    # правый
+    xml.append('    <spatial name="tendon_right" limited="false" width="0.002">')
+    xml.append('      <site site="tendon_right_base"/>')
     for i in range(num_links):
-        xml.append(f'      <site site="site_right_{i}"/>')
+        xml.append(f'      <site site="tendon_right_{i}"/>')
     xml.append('    </spatial>')
     xml.append('  </tendon>')
-    xml.append('')
 
-    # актуаторы
+    # два мотора, по одному на трос
     xml.append('  <actuator>')
     xml.append(
-        '    <motor name="motor_left" tendon="tendon_left" '
-        'ctrlrange="-1 1" gear="1"/>'
+        f'    <motor name="motor_left"  tendon="tendon_left"  gear="{motor_gear:.3f}"/>'
     )
     xml.append(
-        '    <motor name="motor_right" tendon="tendon_right" '
-        'ctrlrange="-1 1" gear="1"/>'
+        f'    <motor name="motor_right" tendon="tendon_right" gear="{motor_gear:.3f}"/>'
     )
     xml.append('  </actuator>')
 
     xml.append('</mujoco>')
 
-    return "\\n".join(xml)
+    return "\n".join(xml)
 
 
 if __name__ == "__main__":
     xml = generate_spiral_tentacle_xml()
     with open("spiral_tentacle_hex.xml", "w", encoding="utf-8") as f:
         f.write(xml)
-    print("Saved to spiral_tentacle_hex.xml")
+    print("Saved spiral_tentacle_hex.xml")
