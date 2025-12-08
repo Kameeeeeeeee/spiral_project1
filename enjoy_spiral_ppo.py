@@ -1,8 +1,4 @@
-# enjoy_spiral_ppo.py
-
 from __future__ import annotations
-
-import time
 
 from stable_baselines3 import PPO
 
@@ -16,27 +12,25 @@ def main():
         total_length=0.45,
         base_radius=0.02,
         tip_radius=0.006,
-        max_episode_steps=400,
+        max_episode_steps=2000,
     )
 
-    model_path = "ppo_spiral_cable_2t"
-    model = PPO.load(model_path, env=env)
+    model = PPO.load("ppo_spiral_grasp_stage1")
 
     obs, _ = env.reset()
-    done = False
-    truncated = False
 
     while True:
         action, _ = model.predict(obs, deterministic=True)
-        obs, reward, done, truncated, info = env.step(action)
-
-        if done or truncated:
-            print("episode done, info:", info)
+        obs, reward, terminated, truncated, info = env.step(action)
+        if terminated or truncated:
+            print(
+                f"episode done | success={info.get('success')} "
+                f"dist_tip_ball={info.get('dist_tip_ball'):.3f} "
+                f"disp={info.get('ball_disp'):.3f} "
+                f"wrap={info.get('wrap_term'):.3f} "
+                f"in_contact={info.get('in_contact')} "
+            )
             obs, _ = env.reset()
-            done = False
-            truncated = False
-
-        time.sleep(0.01)
 
 
 if __name__ == "__main__":

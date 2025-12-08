@@ -1,5 +1,3 @@
-# spiral_env.py
-
 import numpy as np
 import gymnasium as gym
 import mujoco
@@ -9,14 +7,13 @@ from generate_spiral_xml import generate_spiral_tentacle_xml
 
 class SpiralTentacle2TEnv(gym.Env):
     """
-    Щупальца из шестиугольных звеньев, приводимая в движение двумя тросами.
+    Два троса управляют сужающейся спиральной кистью (24 звена) и одним шаром-целью.
 
-    Действие агента: [u_ball_side, u_other_side]
-      - action[0] всегда соответствует тросу со стороны мяча (после симметризации),
-      - action[1] - тросу с противоположной стороны.
-
-    Внутри среды мы для некоторых эпизодов зеркалим наблюдение по оси Y и
-    меняем местами реальные тросы, чтобы агент не привыкал к одной стороне.
+    В ЭТОЙ ВЕРСИИ:
+    - Цель: ОБВИТЬ шар и УДЕРЖИВАТЬ его, почти не сдвигая.
+    - Перетаскивание к базе пока не учим (это будет второй стейдж).
+    - Введена симметрия по лево/право: для агента action[0] всегда трос
+      со стороны шара, action[1] - противоположный трос.
     """
 
     metadata = {"render_modes": ["human"], "render_fps": 60}
@@ -40,9 +37,9 @@ class SpiralTentacle2TEnv(gym.Env):
 
         xml = generate_spiral_tentacle_xml(
             num_links=num_links,
-            total_length=total_length,
             base_radius=base_radius,
             tip_radius=tip_radius,
+            total_length=total_length,
         )
         self.model = mujoco.MjModel.from_xml_string(xml)
         self.data = mujoco.MjData(self.model)
@@ -54,7 +51,8 @@ class SpiralTentacle2TEnv(gym.Env):
         self.qpos_n = self.model.nq
         self.qvel_n = self.model.nv
 
-        self.ctrl_scale = 1.5
+        # чуть мягче, чем раньше, чтобы не разгоняться
+        self.ctrl_scale = 0.6
 
         self.action_space = gym.spaces.Box(
             low=-1.0,
@@ -83,7 +81,7 @@ class SpiralTentacle2TEnv(gym.Env):
             self.model.body(f"link_{i}").id for i in range(self.num_links)
         ]
 
-        # индексы hinge-суставов (для зеркалирования углов и скоростей)
+        # индексы hinge-суставов - чтобы уметь зеркалить углы
         self.hinge_qpos_idx = []
         self.hinge_qvel_idx = []
         for j in range(self.model.njnt):
@@ -107,23 +105,23 @@ class SpiralTentacle2TEnv(gym.Env):
 
         self.step_counter = 0
         self.hold_steps = 0
-        self.required_hold_steps = 18
+        self.required_hold_steps = 20
 
+        # критерий успеха по расстоянию кончик-шар
         self.grasp_dist_threshold = 0.07
-        self.grasp_speed_threshold = 0.04
+        # и по скорости шара
+        self.grasp_speed_threshold = 0.02
 
         self.prev_dist_tip_ball = None
-        self.prev_dist_ball_base = None
-        self.best_dist_ball_base = None
-        self.best_step_base = 0
-        self.stall_patience = 50
-
         self.prev_action = np.zeros(self.act_n, dtype=np.float32)
 
-        # знак симметрии: +1 - ничего не зеркалим, -1 - зеркалим Y и меняем местами тросы
+        # для оценки смещения мяча от стартовой позиции
+        self.ball_init_pos = None
+
+        # симметрия: +1 - ничего не зеркалим, -1 - зеркалим по оси Y
         self.sym_sign = 1.0
 
-    # ---------- helpers ----------
+    # ---------- helpers для позиций и симметрии ----------
 
     def _tip_pos(self):
         return self.data.xpos[self.tip_body_id].copy()
@@ -159,10 +157,8 @@ class SpiralTentacle2TEnv(gym.Env):
 
     def _symmetrize_q(self, qpos, qvel):
         """
-        Возвращает копии qpos, qvel в "каноническом" виде:
-        если sym_sign == -1, зеркалим по Y:
-          - меняем знак углов и скоростей hinge-суставов,
-          - остальные координаты не трогаем.
+        Возвращает qpos, qvel в "каноническом" виде:
+        если sym_sign == -1, зеркалим по Y: меняем знак углов/скоростей hinge-суставов.
         """
         if self.sym_sign > 0:
             return qpos, qvel
@@ -186,11 +182,10 @@ class SpiralTentacle2TEnv(gym.Env):
         return v_sym
 
     def _get_obs(self):
-        # реальные qpos/qvel из MuJoCo
+        # реальные qpos/qvel
         qpos = self.data.qpos.ravel()
         qvel = self.data.qvel.ravel()
 
-        # зеркалим углы и скорости суставов при необходимости
         qpos_sym, qvel_sym = self._symmetrize_q(qpos, qvel)
 
         tip = self._symmetrize_vec3(self._tip_pos())
@@ -204,125 +199,107 @@ class SpiralTentacle2TEnv(gym.Env):
             [qpos_sym, qvel_sym, tip, ball, rel_tip_ball, rel_ball_base]
         ).astype(np.float32)
 
-    # ---------- reward ----------
+    # ---------- reward: учим захват без перетаскивания ----------
 
     def _compute_reward(self, action):
-        # ВАЖНО: награду считаем в реальных координатах без симметрии,
-        # поэтому используем прямые xpos / cvel.
-
+        # ВАЖНО: награда считается в реальных (не симметризованных) координатах
         tip = self._tip_pos()
         ball = self._ball_pos()
         base = self._base_pos()
         ball_vel = self._ball_linvel()
 
         dist_tip_ball = float(np.linalg.norm(tip - ball))
-        dist_ball_base = float(np.linalg.norm(ball - base))
 
         if self.prev_dist_tip_ball is None:
             self.prev_dist_tip_ball = dist_tip_ball
-        if self.prev_dist_ball_base is None:
-            self.prev_dist_ball_base = dist_ball_base
 
         delta_tip = self.prev_dist_tip_ball - dist_tip_ball
-        delta_base = self.prev_dist_ball_base - dist_ball_base
 
-        reward = 0.0
-
-        # 1. стадия: тянемся к шару
-        near_ball_switch = 0.10
-        if dist_tip_ball > near_ball_switch:
-            reward += 4.0 * delta_tip
-            reward -= 0.06 * dist_tip_ball
+        # смещение мяча относительно стартовой позиции
+        if self.ball_init_pos is None:
+            disp = 0.0
         else:
-            # 2. стадия: рядом с шаром - важнее тянуть его к базе
-            reward += 1.0 * delta_tip
-            reward += 4.0 * delta_base
-            reward -= 0.03 * dist_ball_base
-
-        # мягкий штраф за расстояние до базы
-        reward -= 0.01 * dist_ball_base
+            disp = float(np.linalg.norm(ball - self.ball_init_pos))
 
         in_contact, num_contacts = self._ball_contact_stats()
         speed = float(np.linalg.norm(ball_vel))
         speed_sq = speed * speed
 
+        # оценка "обвития": шар между базой и кончиком
         base_to_ball = ball - base
-        base_to_ball_norm = np.linalg.norm(base_to_ball) + 1e-8
-        away_speed = float(np.dot(ball_vel, base_to_ball) / base_to_ball_norm)
-        toward_speed = -away_speed
-
         tip_to_ball = ball - tip
+        base_to_ball_norm = np.linalg.norm(base_to_ball) + 1e-8
         tip_to_ball_norm = np.linalg.norm(tip_to_ball) + 1e-8
-
         wrap_cos = float(
             np.dot(base_to_ball, tip_to_ball)
             / (base_to_ball_norm * tip_to_ball_norm)
         )
-        wrap_term = max(0.0, -wrap_cos)  # >0, когда шар между базой и кончиком
+        wrap_term = max(0.0, -wrap_cos)  # 0..1, >0 когда шар "между" базой и кончиком
 
-        # базовый штраф за скорость (ослабленный)
-        reward -= 0.8 * speed_sq
+        reward = 0.0
+
+        # 1) Подползти к шару
+        reward += 4.0 * delta_tip
+        reward -= 0.06 * dist_tip_ball
+
+        # небольшой штраф за слишком высокую скорость всегда
+        reward -= 0.4 * speed_sq
 
         if in_contact:
-            reward += 1.5
-            if num_contacts > 1:
-                reward += 0.7 * (num_contacts - 1)
+            # сам факт контакта
+            reward += 2.0
 
-            reward += 4.0 * delta_base
-            reward += 1.2 * max(toward_speed, 0.0)
+            # больше звеньев в контакте - лучше (обвитие)
+            if num_contacts > 1:
+                reward += 0.8 * (num_contacts - 1)
+
+            # поощряем "обвитость"
             reward += 3.0 * wrap_term
 
-            if wrap_term > 0.4 and dist_ball_base > 0.06:
-                reward += 3.0 * delta_base
-                reward += 0.5 * (1.0 - min(dist_ball_base / 0.3, 1.0))
+            # поощряем нахождение кончика рядом с шаром
+            reward += 1.5 * max(0.0, 0.08 - dist_tip_ball)
 
-            if away_speed > 0.005:
-                reward -= 10.0 * away_speed
+            # СИЛЬНО штрафуем движение мяча, когда держим его
+            reward -= 5.0 * disp
+            reward -= 8.0 * speed_sq
+        else:
+            # пока контакта нет - только мягкий штраф за скорость,
+            # чтобы можно было активнее подходить
+            reward -= 0.1 * speed_sq
 
-            if speed > 0.06:
-                reward -= 8.0 * (speed - 0.06)
+        # успех: обвили, касаемся несколькими звеньями, шар почти не двигается
+        close_tip = dist_tip_ball < self.grasp_dist_threshold
+        slow_ball = speed < self.grasp_speed_threshold
+        small_disp = disp < 0.02  # мяч почти на месте (2 см)
+        good_wrap = wrap_term > 0.5 and num_contacts >= 2
 
-            if abs(delta_base) < 1e-4 and dist_ball_base > 0.07:
-                reward -= 1.5
-
-            if dist_tip_ball < 0.09 and wrap_term < 0.2 and num_contacts <= 1:
-                reward -= 2.5 * (0.2 - wrap_term)
-
-        near_base = dist_ball_base < 0.055
-        slow = speed < self.grasp_speed_threshold
-        if dist_tip_ball < self.grasp_dist_threshold and slow and in_contact:
+        if in_contact and close_tip and slow_ball and small_disp and good_wrap:
             self.hold_steps += 1
         else:
             self.hold_steps = 0
 
-        success = near_base and self.hold_steps >= self.required_hold_steps
-        if success:
-            reward += 20.0
+        success = self.hold_steps >= self.required_hold_steps
 
+        if success:
+            reward += 20.0  # финальный большой бонус
+
+        # штраф за выброс мяча вверх
         if ball[2] > self.ball_radius * 2.0:
             reward -= 2.0 * (ball[2] - self.ball_radius * 2.0)
 
-        if abs(delta_tip) < 1e-4 and abs(delta_base) < 1e-4:
-            reward -= 0.6
+        # если вообще не двигаемся к шару - небольшой штраф за лень
+        if abs(delta_tip) < 1e-4 and not in_contact:
+            reward -= 0.5
 
-        if self.best_dist_ball_base is None or dist_ball_base < self.best_dist_ball_base:
-            self.best_dist_ball_base = dist_ball_base
-            self.best_step_base = self.step_counter
-        elif (
-            self.step_counter - self.best_step_base > self.stall_patience
-            and dist_ball_base > 0.12
-        ):
-            reward -= 7.0
-            self.best_step_base = self.step_counter
-
-        # L2-регуляризация действий (в канонических, не в реальных тросах – норм)
-        reward -= 0.002 * float(np.sum(np.square(action)))
+        # энергосбережение и сглаживание действия
+        reward -= 0.001 * float(np.sum(np.square(action)))
+        delta_a = action - self.prev_action
+        reward -= 0.003 * float(np.sum(np.square(delta_a)))
         self.prev_action = action.copy()
 
         self.prev_dist_tip_ball = dist_tip_ball
-        self.prev_dist_ball_base = dist_ball_base
 
-        return reward, success, dist_tip_ball, dist_ball_base, speed
+        return reward, success, dist_tip_ball, disp, speed, wrap_term, in_contact
 
     # ---------- Gym API ----------
 
@@ -332,13 +309,11 @@ class SpiralTentacle2TEnv(gym.Env):
         self.step_counter = 0
         self.hold_steps = 0
         self.prev_dist_tip_ball = None
-        self.prev_dist_ball_base = None
-        self.best_dist_ball_base = None
-        self.best_step_base = 0
         self.prev_action[:] = 0.0
-        self.sym_sign = 1.0  # переопределим ниже, когда заспавним шар
+        self.ball_init_pos = None
+        self.sym_sign = 1.0
 
-        # небольшой шум по начальной позе
+        # старт: небольшое случайное отклонение звеньев
         self.data.qpos[:] += 0.02 * self.np_random.normal(size=self.qpos_n)
         mujoco.mj_forward(self.model, self.data)
 
@@ -358,6 +333,7 @@ class SpiralTentacle2TEnv(gym.Env):
         dir_xy_unit = dir_xy / norm_xy
         dist_base_tip_xy = norm_xy
 
+        # поперечный вектор (влево-вправо от "оси" щупальца)
         perp_xy = np.array([-dir_xy_unit[1], dir_xy_unit[0]], dtype=float)
 
         clearance = self.ball_radius + self.base_radius * 1.2
@@ -365,9 +341,12 @@ class SpiralTentacle2TEnv(gym.Env):
         ball_pos = None
         last_candidate = None
 
+        # спавним шар НАД полом, но сбоку от щупальца, всегда в зоне досягаемости
         for _ in range(40):
+            # вдоль оси от базы к кончику
             s = self.np_random.uniform(0.35, 0.9) * dist_base_tip_xy
 
+            # поперечное расстояние от оси
             d_min = 0.08 * self.total_length
             d_max = 0.30 * self.total_length
             d_perp = self.np_random.uniform(d_min, d_max)
@@ -380,6 +359,7 @@ class SpiralTentacle2TEnv(gym.Env):
             candidate = np.array([ball_xy[0], ball_xy[1], z], dtype=float)
             last_candidate = candidate
 
+            # не должно спавниться прямо в щупальце
             dists = np.linalg.norm(link_positions - candidate, axis=1)
             if float(dists.min()) > clearance:
                 ball_pos = candidate
@@ -391,19 +371,17 @@ class SpiralTentacle2TEnv(gym.Env):
         # записываем позицию шара
         self.data.qpos[self.ball_qpos_adr : self.ball_qpos_adr + 3] = ball_pos
         self.data.qvel[self.ball_dof_adr : self.ball_dof_adr + 6] = 0.0
+        self.ball_init_pos = ball_pos.copy()
 
         mujoco.mj_forward(self.model, self.data)
 
-        # определяем сторону мяча по Y относительно базы
+        # определяем сторону шара по оси Y - для симметрии
         base_pos = self._base_pos()
         ball_pos = self._ball_pos()
-        # если мяч справа (Y < 0) - включаем зеркалирование
         self.sym_sign = 1.0 if ball_pos[1] >= base_pos[1] else -1.0
 
         tip_pos = self._tip_pos()
         self.prev_dist_tip_ball = float(np.linalg.norm(tip_pos - ball_pos))
-        self.prev_dist_ball_base = float(np.linalg.norm(ball_pos - base_pos))
-        self.best_dist_ball_base = self.prev_dist_ball_base
 
         obs = self._get_obs()
         return obs, {}
@@ -414,9 +392,9 @@ class SpiralTentacle2TEnv(gym.Env):
         action = np.clip(action, -1.0, 1.0)
 
         # сопоставляем "канонические" действия с реальными тросами:
-        # motor_0 в XML - левый трос (Y>0), motor_1 - правый (Y<0).
-        # sym_sign == +1: мяч слева → action[0] -> левый, action[1] -> правый.
-        # sym_sign == -1: мяч справа → action[0] -> правый, action[1] -> левый.
+        # считаем, что motor_0 в XML - левый трос (Y>0), motor_1 - правый (Y<0).
+        # sym_sign == +1: шар слева → action[0] -> левый.
+        # sym_sign == -1: шар справа → action[0] -> правый.
         if self.sym_sign > 0:
             left_ctrl = action[0]
             right_ctrl = action[1]
@@ -431,7 +409,7 @@ class SpiralTentacle2TEnv(gym.Env):
             mujoco.mj_step(self.model, self.data)
 
         obs = self._get_obs()
-        reward, success, dist_tip_ball, dist_ball_base, speed = self._compute_reward(
+        reward, success, dist_tip_ball, disp, speed, wrap_term, in_contact = self._compute_reward(
             action
         )
 
@@ -441,8 +419,10 @@ class SpiralTentacle2TEnv(gym.Env):
         info = {
             "success": success,
             "dist_tip_ball": dist_tip_ball,
-            "dist_ball_base": dist_ball_base,
+            "ball_disp": disp,
             "ball_speed": speed,
+            "wrap_term": wrap_term,
+            "in_contact": in_contact,
             "hold_steps": self.hold_steps,
         }
 
