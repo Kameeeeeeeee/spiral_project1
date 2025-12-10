@@ -1,4 +1,4 @@
-# hex link mesh normalized along x in [0,1]
+# hex link mesh, X in [0,1], Y around [-0.5,0.5], Z in [-0.5,0.5]
 v 1.000000 0.000000 0.500000
 v 0.862069 0.500000 0.500000
 v 0.369458 0.500000 0.500000

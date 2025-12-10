@@ -1,0 +1,250 @@
+<mujoco model="spiral_tentacle_hex_spirob_2c">
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+  <default>
+    <joint damping="0.4000" frictionloss="0.0200"/>
+    <geom condim="3" friction="0.8 0.1 0.01" rgba="0.9 0.9 0.9 1"/>
+  </default>
+  <asset>
+    <mesh name="hex_base" file="hex_base.obj"/>
+    <mesh name="hex_0" file="hex_base.obj" scale="0.003694 0.004242 0.010000"/>
+    <mesh name="hex_1" file="hex_base.obj" scale="0.004145 0.004759 0.010000"/>
+    <mesh name="hex_2" file="hex_base.obj" scale="0.004651 0.005340 0.010000"/>
+    <mesh name="hex_3" file="hex_base.obj" scale="0.005219 0.005993 0.010000"/>
+    <mesh name="hex_4" file="hex_base.obj" scale="0.005856 0.006724 0.010000"/>
+    <mesh name="hex_5" file="hex_base.obj" scale="0.006571 0.007545 0.010000"/>
+    <mesh name="hex_6" file="hex_base.obj" scale="0.007373 0.008466 0.010000"/>
+    <mesh name="hex_7" file="hex_base.obj" scale="0.008273 0.009500 0.010000"/>
+    <mesh name="hex_8" file="hex_base.obj" scale="0.009284 0.010660 0.010000"/>
+    <mesh name="hex_9" file="hex_base.obj" scale="0.010417 0.011961 0.010000"/>
+    <mesh name="hex_10" file="hex_base.obj" scale="0.011689 0.013421 0.010000"/>
+    <mesh name="hex_11" file="hex_base.obj" scale="0.013116 0.015060 0.010000"/>
+    <mesh name="hex_12" file="hex_base.obj" scale="0.014717 0.016899 0.010000"/>
+    <mesh name="hex_13" file="hex_base.obj" scale="0.016514 0.018962 0.010000"/>
+    <mesh name="hex_14" file="hex_base.obj" scale="0.018530 0.021277 0.010000"/>
+    <mesh name="hex_15" file="hex_base.obj" scale="0.020792 0.023874 0.010000"/>
+    <mesh name="hex_16" file="hex_base.obj" scale="0.023331 0.026789 0.010000"/>
+    <mesh name="hex_17" file="hex_base.obj" scale="0.026179 0.030060 0.010000"/>
+    <mesh name="hex_18" file="hex_base.obj" scale="0.029376 0.033730 0.010000"/>
+    <mesh name="hex_19" file="hex_base.obj" scale="0.032962 0.037848 0.010000"/>
+    <mesh name="hex_20" file="hex_base.obj" scale="0.036986 0.042469 0.010000"/>
+    <mesh name="hex_21" file="hex_base.obj" scale="0.041502 0.047654 0.010000"/>
+    <mesh name="hex_22" file="hex_base.obj" scale="0.046569 0.053472 0.010000"/>
+    <mesh name="hex_23" file="hex_base.obj" scale="0.052254 0.060000 0.010000"/>
+  </asset>
+  <worldbody>
+    <geom name="floor" type="plane" size="2 2 0.1" rgba="0.8 0.8 0.8 1"/>
+    <body name="base" pos="0 0 0.015000">
+      <geom type="sphere" size="0.03" rgba="0.3 0.3 0.3 1"/>
+      <site name="tendon_left_base"  pos="0 0.030000 0" size="0.002"/>
+      <site name="tendon_right_base" pos="0 -0.030000 0" size="0.002"/>
+      <body name="link_0" pos="0 0 0">
+        <joint name="joint_0" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+        <geom name="link_geom_0" type="mesh" mesh="hex_0" pos="0 0 0" density="300.0"/>
+        <site name="tendon_left_0"  pos="0.001847 0.002121 0" size="0.002"/>
+        <site name="tendon_right_0" pos="0.001847 -0.002121 0" size="0.002"/>
+        <body name="link_1" pos="0.003694 0 0">
+          <joint name="joint_1" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+          <geom name="link_geom_1" type="mesh" mesh="hex_1" pos="0 0 0" density="300.0"/>
+          <site name="tendon_left_1"  pos="0.002072 0.002380 0" size="0.002"/>
+          <site name="tendon_right_1" pos="0.002072 -0.002380 0" size="0.002"/>
+          <body name="link_2" pos="0.004145 0 0">
+            <joint name="joint_2" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+            <geom name="link_geom_2" type="mesh" mesh="hex_2" pos="0 0 0" density="300.0"/>
+            <site name="tendon_left_2"  pos="0.002326 0.002670 0" size="0.002"/>
+            <site name="tendon_right_2" pos="0.002326 -0.002670 0" size="0.002"/>
+            <body name="link_3" pos="0.004651 0 0">
+              <joint name="joint_3" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+              <geom name="link_geom_3" type="mesh" mesh="hex_3" pos="0 0 0" density="300.0"/>
+              <site name="tendon_left_3"  pos="0.002609 0.002996 0" size="0.002"/>
+              <site name="tendon_right_3" pos="0.002609 -0.002996 0" size="0.002"/>
+              <body name="link_4" pos="0.005219 0 0">
+                <joint name="joint_4" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                <geom name="link_geom_4" type="mesh" mesh="hex_4" pos="0 0 0" density="300.0"/>
+                <site name="tendon_left_4"  pos="0.002928 0.003362 0" size="0.002"/>
+                <site name="tendon_right_4" pos="0.002928 -0.003362 0" size="0.002"/>
+                <body name="link_5" pos="0.005856 0 0">
+                  <joint name="joint_5" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                  <geom name="link_geom_5" type="mesh" mesh="hex_5" pos="0 0 0" density="300.0"/>
+                  <site name="tendon_left_5"  pos="0.003286 0.003773 0" size="0.002"/>
+                  <site name="tendon_right_5" pos="0.003286 -0.003773 0" size="0.002"/>
+                  <body name="link_6" pos="0.006571 0 0">
+                    <joint name="joint_6" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                    <geom name="link_geom_6" type="mesh" mesh="hex_6" pos="0 0 0" density="300.0"/>
+                    <site name="tendon_left_6"  pos="0.003687 0.004233 0" size="0.002"/>
+                    <site name="tendon_right_6" pos="0.003687 -0.004233 0" size="0.002"/>
+                    <body name="link_7" pos="0.007373 0 0">
+                      <joint name="joint_7" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                      <geom name="link_geom_7" type="mesh" mesh="hex_7" pos="0 0 0" density="300.0"/>
+                      <site name="tendon_left_7"  pos="0.004137 0.004750 0" size="0.002"/>
+                      <site name="tendon_right_7" pos="0.004137 -0.004750 0" size="0.002"/>
+                      <body name="link_8" pos="0.008273 0 0">
+                        <joint name="joint_8" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                        <geom name="link_geom_8" type="mesh" mesh="hex_8" pos="0 0 0" density="300.0"/>
+                        <site name="tendon_left_8"  pos="0.004642 0.005330 0" size="0.002"/>
+                        <site name="tendon_right_8" pos="0.004642 -0.005330 0" size="0.002"/>
+                        <body name="link_9" pos="0.009284 0 0">
+                          <joint name="joint_9" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                          <geom name="link_geom_9" type="mesh" mesh="hex_9" pos="0 0 0" density="300.0"/>
+                          <site name="tendon_left_9"  pos="0.005208 0.005981 0" size="0.002"/>
+                          <site name="tendon_right_9" pos="0.005208 -0.005981 0" size="0.002"/>
+                          <body name="link_10" pos="0.010417 0 0">
+                            <joint name="joint_10" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                            <geom name="link_geom_10" type="mesh" mesh="hex_10" pos="0 0 0" density="300.0"/>
+                            <site name="tendon_left_10"  pos="0.005844 0.006711 0" size="0.002"/>
+                            <site name="tendon_right_10" pos="0.005844 -0.006711 0" size="0.002"/>
+                            <body name="link_11" pos="0.011689 0 0">
+                              <joint name="joint_11" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                              <geom name="link_geom_11" type="mesh" mesh="hex_11" pos="0 0 0" density="300.0"/>
+                              <site name="tendon_left_11"  pos="0.006558 0.007530 0" size="0.002"/>
+                              <site name="tendon_right_11" pos="0.006558 -0.007530 0" size="0.002"/>
+                              <body name="link_12" pos="0.013116 0 0">
+                                <joint name="joint_12" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                                <geom name="link_geom_12" type="mesh" mesh="hex_12" pos="0 0 0" density="300.0"/>
+                                <site name="tendon_left_12"  pos="0.007359 0.008449 0" size="0.002"/>
+                                <site name="tendon_right_12" pos="0.007359 -0.008449 0" size="0.002"/>
+                                <body name="link_13" pos="0.014717 0 0">
+                                  <joint name="joint_13" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                                  <geom name="link_geom_13" type="mesh" mesh="hex_13" pos="0 0 0" density="300.0"/>
+                                  <site name="tendon_left_13"  pos="0.008257 0.009481 0" size="0.002"/>
+                                  <site name="tendon_right_13" pos="0.008257 -0.009481 0" size="0.002"/>
+                                  <body name="link_14" pos="0.016514 0 0">
+                                    <joint name="joint_14" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                                    <geom name="link_geom_14" type="mesh" mesh="hex_14" pos="0 0 0" density="300.0"/>
+                                    <site name="tendon_left_14"  pos="0.009265 0.010638 0" size="0.002"/>
+                                    <site name="tendon_right_14" pos="0.009265 -0.010638 0" size="0.002"/>
+                                    <body name="link_15" pos="0.018530 0 0">
+                                      <joint name="joint_15" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                                      <geom name="link_geom_15" type="mesh" mesh="hex_15" pos="0 0 0" density="300.0"/>
+                                      <site name="tendon_left_15"  pos="0.010396 0.011937 0" size="0.002"/>
+                                      <site name="tendon_right_15" pos="0.010396 -0.011937 0" size="0.002"/>
+                                      <body name="link_16" pos="0.020792 0 0">
+                                        <joint name="joint_16" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                                        <geom name="link_geom_16" type="mesh" mesh="hex_16" pos="0 0 0" density="300.0"/>
+                                        <site name="tendon_left_16"  pos="0.011665 0.013395 0" size="0.002"/>
+                                        <site name="tendon_right_16" pos="0.011665 -0.013395 0" size="0.002"/>
+                                        <body name="link_17" pos="0.023331 0 0">
+                                          <joint name="joint_17" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                                          <geom name="link_geom_17" type="mesh" mesh="hex_17" pos="0 0 0" density="300.0"/>
+                                          <site name="tendon_left_17"  pos="0.013090 0.015030 0" size="0.002"/>
+                                          <site name="tendon_right_17" pos="0.013090 -0.015030 0" size="0.002"/>
+                                          <body name="link_18" pos="0.026179 0 0">
+                                            <joint name="joint_18" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                                            <geom name="link_geom_18" type="mesh" mesh="hex_18" pos="0 0 0" density="300.0"/>
+                                            <site name="tendon_left_18"  pos="0.014688 0.016865 0" size="0.002"/>
+                                            <site name="tendon_right_18" pos="0.014688 -0.016865 0" size="0.002"/>
+                                            <body name="link_19" pos="0.029376 0 0">
+                                              <joint name="joint_19" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                                              <geom name="link_geom_19" type="mesh" mesh="hex_19" pos="0 0 0" density="300.0"/>
+                                              <site name="tendon_left_19"  pos="0.016481 0.018924 0" size="0.002"/>
+                                              <site name="tendon_right_19" pos="0.016481 -0.018924 0" size="0.002"/>
+                                              <body name="link_20" pos="0.032962 0 0">
+                                                <joint name="joint_20" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                                                <geom name="link_geom_20" type="mesh" mesh="hex_20" pos="0 0 0" density="300.0"/>
+                                                <site name="tendon_left_20"  pos="0.018493 0.021234 0" size="0.002"/>
+                                                <site name="tendon_right_20" pos="0.018493 -0.021234 0" size="0.002"/>
+                                                <body name="link_21" pos="0.036986 0 0">
+                                                  <joint name="joint_21" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                                                  <geom name="link_geom_21" type="mesh" mesh="hex_21" pos="0 0 0" density="300.0"/>
+                                                  <site name="tendon_left_21"  pos="0.020751 0.023827 0" size="0.002"/>
+                                                  <site name="tendon_right_21" pos="0.020751 -0.023827 0" size="0.002"/>
+                                                  <body name="link_22" pos="0.041502 0 0">
+                                                    <joint name="joint_22" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                                                    <geom name="link_geom_22" type="mesh" mesh="hex_22" pos="0 0 0" density="300.0"/>
+                                                    <site name="tendon_left_22"  pos="0.023284 0.026736 0" size="0.002"/>
+                                                    <site name="tendon_right_22" pos="0.023284 -0.026736 0" size="0.002"/>
+                                                    <body name="link_23" pos="0.046569 0 0">
+                                                      <joint name="joint_23" type="hinge" axis="0 0 1" pos="0 0 0" range="-120 120"/>
+                                                      <geom name="link_geom_23" type="mesh" mesh="hex_23" pos="0 0 0" density="300.0"/>
+                                                      <site name="tendon_left_23"  pos="0.026127 0.030000 0" size="0.002"/>
+                                                      <site name="tendon_right_23" pos="0.026127 -0.030000 0" size="0.002"/>
+                                                    </body>
+                                                  </body>
+                                                </body>
+                                              </body>
+                                            </body>
+                                          </body>
+                                        </body>
+                                      </body>
+                                    </body>
+                                  </body>
+                                </body>
+                              </body>
+                            </body>
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>  <!-- base -->
+    <body name="obj_sphere" pos="0.315000 0 0.002545">
+      <joint name="obj_sphere_free" type="free"/>
+      <geom name="obj_sphere_geom" type="sphere" size="0.002545" density="300" friction="1.2 0.3 0.02" rgba="0 1 0 1"/>
+    </body>
+  </worldbody>
+  <tendon>
+    <spatial name="tendon_left" limited="false" width="0.002">
+      <site site="tendon_left_base"/>
+      <site site="tendon_left_0"/>
+      <site site="tendon_left_1"/>
+      <site site="tendon_left_2"/>
+      <site site="tendon_left_3"/>
+      <site site="tendon_left_4"/>
+      <site site="tendon_left_5"/>
+      <site site="tendon_left_6"/>
+      <site site="tendon_left_7"/>
+      <site site="tendon_left_8"/>
+      <site site="tendon_left_9"/>
+      <site site="tendon_left_10"/>
+      <site site="tendon_left_11"/>
+      <site site="tendon_left_12"/>
+      <site site="tendon_left_13"/>
+      <site site="tendon_left_14"/>
+      <site site="tendon_left_15"/>
+      <site site="tendon_left_16"/>
+      <site site="tendon_left_17"/>
+      <site site="tendon_left_18"/>
+      <site site="tendon_left_19"/>
+      <site site="tendon_left_20"/>
+      <site site="tendon_left_21"/>
+      <site site="tendon_left_22"/>
+      <site site="tendon_left_23"/>
+    </spatial>
+    <spatial name="tendon_right" limited="false" width="0.002">
+      <site site="tendon_right_base"/>
+      <site site="tendon_right_0"/>
+      <site site="tendon_right_1"/>
+      <site site="tendon_right_2"/>
+      <site site="tendon_right_3"/>
+      <site site="tendon_right_4"/>
+      <site site="tendon_right_5"/>
+      <site site="tendon_right_6"/>
+      <site site="tendon_right_7"/>
+      <site site="tendon_right_8"/>
+      <site site="tendon_right_9"/>
+      <site site="tendon_right_10"/>
+      <site site="tendon_right_11"/>
+      <site site="tendon_right_12"/>
+      <site site="tendon_right_13"/>
+      <site site="tendon_right_14"/>
+      <site site="tendon_right_15"/>
+      <site site="tendon_right_16"/>
+      <site site="tendon_right_17"/>
+      <site site="tendon_right_18"/>
+      <site site="tendon_right_19"/>
+      <site site="tendon_right_20"/>
+      <site site="tendon_right_21"/>
+      <site site="tendon_right_22"/>
+      <site site="tendon_right_23"/>
+    </spatial>
+  </tendon>
+  <actuator>
+    <motor name="motor_left"  tendon="tendon_left"  gear="3.000"/>
+    <motor name="motor_right" tendon="tendon_right" gear="3.000"/>
+  </actuator>
+</mujoco>
