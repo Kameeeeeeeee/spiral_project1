@@ -12,19 +12,15 @@ from pathlib import Path
 
 
 def write_hex_mesh(filename: str = "hex_base.obj") -> None:
-    # Координаты в плоскости XY (вид сверху).
-    # Узкая грань справа (x ~ 0.156), широкая слева (x ~ -0.25).
     verts_2d = [
-        (0.156, 0.00),   # v0 - правая "узкая" вершина
+        (0.156, 0.00),   # v0
         (0.10,  0.50),   # v1
         (-0.10, 0.50),   # v2
-        (-0.25, 0.00),   # v3 - левая "широкая" вершина
+        (-0.25, 0.00),   # v3
         (-0.10, -0.50),  # v4
         (0.10,  -0.50),  # v5
     ]
 
-    # Нормируем X в [0, 1], чтобы 0 - широкая сторона (корень),
-    # 1 - узкая сторона (кончик звена).
     xs = [x for x, _ in verts_2d]
     min_x = min(xs)
     max_x = max(xs)
@@ -36,18 +32,13 @@ def write_hex_mesh(filename: str = "hex_base.obj") -> None:
     half_z = thickness / 2.0
 
     verts_3d: list[tuple[float, float, float]] = []
-
-    # Верхнее основание (z = +1/2)
     for x, y in norm_2d:
         verts_3d.append((x, y, half_z))
-
-    # Нижнее основание (z = -1/2)
     for x, y in norm_2d:
         verts_3d.append((x, y, -half_z))
 
     faces: list[tuple[int, int, int]] = []
 
-    # Верхнее основание (0..5) - триангуляция вокруг v0
     faces.extend([
         (0, 1, 2),
         (0, 2, 3),
@@ -55,7 +46,6 @@ def write_hex_mesh(filename: str = "hex_base.obj") -> None:
         (0, 4, 5),
     ])
 
-    # Нижнее основание (6..11), ориентация так, чтобы нормали смотрели наружу
     faces.extend([
         (8, 7, 6),
         (9, 8, 6),
@@ -63,7 +53,6 @@ def write_hex_mesh(filename: str = "hex_base.obj") -> None:
         (11, 10, 6),
     ])
 
-    # Боковые грани
     for i in range(6):
         j = (i + 1) % 6
         top_i = i
