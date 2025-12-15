@@ -1,298 +1,332 @@
 # generate_spiral_xml.py
-#
-# SpiRob-подобная щупальца с двумя тросами.
-# Важно:
-# - звенья: mesh (hex_base.obj), никаких капсул
-# - базовое состояние: ПРЯМАЯ щупальца (без предварительного скручивания)
-# - самоколлизия: включена, но исключены соседние звенья чтобы не было дрожи
-#
-# Фиксы:
-# - основание мягче, кончик менее гиперактивен
-# - уменьшено самопроникновение при сильном зажатии и резких движениях:
-#   dt меньше, итераций больше, увеличен бюджет контактов, контакты жестче
-
 from __future__ import annotations
+
 import math
-from typing import List
+from typing import Tuple, List
+
+from generate_hex_mesh import ensure_unit_hex_mesh_obj
 
 
-def _compute_spiral_geometry(
-    num_links: int,
-    total_length: float,
-    taper_angle_deg: float,
-    delta_theta_deg: float,
-    base_width_target: float,
-) -> tuple[List[float], List[float], float, float]:
-    delta_theta = math.radians(delta_theta_deg)
-    theta_N = num_links * delta_theta
+def _clamp(x: float, lo: float, hi: float) -> float:
+    if x < lo:
+        return lo
+    if x > hi:
+        return hi
+    return x
 
-    # параметр логарифмической спирали (подобран ранее)
-    b = 0.22
 
-    exp_b_thetaN = math.exp(b * theta_N)
-    denom = exp_b_thetaN - 1.0
-    if denom <= 0:
-        raise ValueError("denominator for length computation is non positive")
-
-    lengths_tip2base: List[float] = []
-    for k in range(num_links):
-        theta_k = k * delta_theta
-        theta_k1 = (k + 1) * delta_theta
-        segment = math.exp(b * theta_k1) - math.exp(b * theta_k)
-        L_k = total_length * segment / denom
-        lengths_tip2base.append(L_k)
-
-    theta_mid_last = (num_links - 0.5) * delta_theta
-    w0 = base_width_target / math.exp(b * theta_mid_last)
-
-    widths_tip2base: List[float] = []
-    for k in range(num_links):
-        theta_mid = (k + 0.5) * delta_theta
-        w_k = w0 * math.exp(b * theta_mid)
-        widths_tip2base.append(w_k)
-
-    link_lengths = list(reversed(lengths_tip2base))
-    link_widths = list(reversed(widths_tip2base))
-
-    base_width = link_widths[0]
-    tip_width = link_widths[-1]
-    return link_lengths, link_widths, base_width, tip_width
+def _fmt(seq) -> str:
+    if isinstance(seq, (tuple, list)):
+        return " ".join(f"{v:.8g}" for v in seq)
+    return f"{seq:.8g}"
 
 
 def generate_spiral_tentacle_xml(
-    num_links: int = 24,
-    total_length: float = 0.20,
-    taper_angle_deg: float = 15.0,
+    *,
+    n_segments: int = 24,
     delta_theta_deg: float = 30.0,
-    base_width_target: float = 0.03,
-    thickness: float = 0.05,
-    link_density: float = 180.0,
+    taper_angle_deg: float = 15.0,
+    tip_width: float = 0.012,
+    tip_thickness: float = 0.010,
+    tip_length: float = 0.020,
+    cable_offset_frac: float = 0.45,
+    joint_epsilon_frac: float = 0.08,
+    base_pos: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    ground_friction: Tuple[float, float, float] = (1.2, 0.02, 0.0005),
+    link_friction: Tuple[float, float, float] = (1.0, 0.02, 0.0005),
+    solref: Tuple[float, float] = (0.004, 1.0),
+    solimp: Tuple[float, float, float] = (0.98, 0.995, 0.001),
+    k0: float = 30.0,
+    damping_ratio: float = 0.55,
+    armature_base: float = 0.0025,
+    armature_tip_mult: float = 0.6,
     motor_gear: float = 900.0,
+    tendon_stiffness: float = 2500.0,
+    tendon_damping: float = 35.0,
+    tendon_width: float = 0.002,
+    pretension_frac: float = 0.01,
+    tendon_rgba_left: Tuple[float, float, float, float] = (0.2, 0.6, 1.0, 1.0),
+    tendon_rgba_right: Tuple[float, float, float, float] = (1.0, 0.5, 0.2, 1.0),
+    steps_per_second: int = 600,
+    mesh_obj_path: str = "assets/unit_hex_link.obj",
 ) -> str:
-    link_lengths, link_widths, base_width, tip_width = _compute_spiral_geometry(
-        num_links=num_links,
-        total_length=total_length,
-        taper_angle_deg=taper_angle_deg,
-        delta_theta_deg=delta_theta_deg,
-        base_width_target=base_width_target,
+    if n_segments < 2:
+        raise ValueError("n_segments must be >= 2")
+    if delta_theta_deg <= 0:
+        raise ValueError("delta_theta_deg must be > 0")
+    if tip_width <= 0 or tip_thickness <= 0 or tip_length <= 0:
+        raise ValueError("tip_width/tip_thickness/tip_length must be > 0")
+
+    mesh_obj_path = mesh_obj_path.replace("\\", "/")
+    ensure_unit_hex_mesh_obj(mesh_obj_path)
+
+    # Log spiral ratio q = exp(b Δθ)
+    alpha = math.radians(taper_angle_deg)
+    b = _clamp(
+        0.10 + 0.25 * ((alpha - math.radians(5.0)) / (math.radians(20.0) - math.radians(5.0))),
+        0.10, 0.35
     )
+    delta_theta = math.radians(delta_theta_deg)
+    q = math.exp(b * delta_theta)
+    a = 1.0
 
-    base_radius = base_width / 2.0
+    def scale_at(i: int) -> float:
+        return q ** (n_segments - 1 - i)  # base biggest
 
-    # Range: сильно увеличиваем базовый, чтобы первые суставы реально могли работать
-    RANGE_BASE = 140.0
-    RANGE_TIP = 280.0
-    joint_range_min: List[float] = []
-    joint_range_max: List[float] = []
-    for i in range(num_links):
-        t = i / max(num_links - 1, 1)
-        r = RANGE_BASE * (1.0 - t) + RANGE_TIP * t
-        joint_range_min.append(-r)
-        joint_range_max.append(r)
+    def dims_at(i: int) -> Tuple[float, float, float]:
+        s = scale_at(i)
+        return tip_length * s, tip_width * s, tip_thickness * s
 
-    # Профили сопротивления:
-    # - основание мягче
-    # - кончик "придушен" (stiffness/damping/frictionloss выше), чтобы не был гиперактивным
-    STIFF_BASE = 0.05
-    STIFF_TIP = 0.18
-    STIFF_EXP = 0.85
+    m_tip = 0.010
+    mjmin_mass = 1e-6
+    mjmin_inertia = 1e-10
 
-    DAMP_BASE = 0.045
-    DAMP_TIP = 0.08
-    DAMP_EXP = 1.0
+    def mass_at(i: int) -> float:
+        s = scale_at(i)
+        m = m_tip * (s ** 3)
+        return max(m, mjmin_mass * 100.0)
 
-    FRIC_BASE = 0.0012
-    FRIC_TIP = 0.0035
-    FRIC_EXP = 1.0
+    def inertial_at(i: int) -> Tuple[float, Tuple[float, float, float]]:
+        m = mass_at(i)
+        L, _, T = dims_at(i)
+        r = 0.5 * T
+        Ixx = 0.5 * m * (r ** 2)
+        Iyy = (1.0 / 12.0) * m * (L ** 2) + 0.25 * m * (r ** 2)
+        Izz = Iyy
+        Ixx = max(Ixx, mjmin_inertia * 100.0)
+        Iyy = max(Iyy, mjmin_inertia * 100.0)
+        Izz = max(Izz, mjmin_inertia * 100.0)
+        return m, (Ixx, Iyy, Izz)
 
-    joint_stiffness: List[float] = []
-    joint_damping: List[float] = []
-    joint_fric: List[float] = []
+    def stiffness_at(i: int) -> float:
+        return k0 * (q ** (-i))
 
-    for i in range(num_links):
-        t = i / max(num_links - 1, 1)
+    c0 = 2.0 * damping_ratio
 
-        s = t ** STIFF_EXP
-        k = STIFF_BASE * (1.0 - s) + STIFF_TIP * s
-        joint_stiffness.append(k)
+    def damping_at(i: int) -> float:
+        return c0 * math.sqrt(max(1e-12, stiffness_at(i)))
 
-        s2 = t ** DAMP_EXP
-        d = DAMP_BASE * (1.0 - s2) + DAMP_TIP * s2
-        joint_damping.append(d)
+    def armature_at(i: int) -> float:
+        t = i / max(1, n_segments - 1)
+        return armature_base * (1.0 - (1.0 - armature_tip_mult) * t)
 
-        s3 = t ** FRIC_EXP
-        f = FRIC_BASE * (1.0 - s3) + FRIC_TIP * s3
-        joint_fric.append(f)
+    bx, by, bz = base_pos
+    base_T = dims_at(0)[2]
+    z0 = 0.5 * base_T
 
-    xml: List[str] = []
-    xml.append('<mujoco model="spiral_tentacle_hex_spirob_2c">')
+    def cable_r(i: int) -> float:
+        _, W, _ = dims_at(i)
+        return cable_offset_frac * 0.5 * W
 
-    # Контакты и устойчивость
-    # - dt меньше, iterations больше
-    # - увеличиваем бюджет контактов (nconmax, njmax) чтобы самоколлизия не "вылетала"
-    xml.append('  <size nconmax="20000" njmax="60000"/>')
-    xml.append(
-        '  <option timestep="0.00012" gravity="0 0 -9.81" integrator="Euler" iterations="220" impratio="2"/>'
-    )
+    def eps_x(i: int) -> float:
+        L, _, _ = dims_at(i)
+        return max(1e-4, joint_epsilon_frac * L)
 
-    xml.append('  <default>')
-    xml.append('    <joint springref="0"/>')
-    xml.append(
-        '    <geom condim="3" friction="0.85 0.12 0.02" '
-        'solimp="0.95 0.995 0.001 0.5 2" solref="0.0014 1" '
-        'rgba="0.9 0.9 0.9 1"/>'
-    )
-    xml.append('  </default>')
+    def site_z(i: int) -> float:
+        _, _, T = dims_at(i)
+        return 0.35 * T
 
-    # ---------- asset ----------
-    xml.append('  <asset>')
-    xml.append('    <mesh name="hex_base" file="hex_base.obj"/>')
-    for i in range(num_links):
-        L = link_lengths[i]
-        W = link_widths[i]
-        xml.append(
-            f'    <mesh name="hex_{i}" file="hex_base.obj" scale="{L:.6f} {W:.6f} {thickness:.6f}"/>'
-        )
-    xml.append('  </asset>')
+    left_path: List[str] = []
+    right_path: List[str] = []
+    link_sites: List[List[str]] = [[] for _ in range(n_segments)]
 
-    # ---------- contact excludes: исключаем только соседей ----------
-    xml.append('  <contact>')
-    for i in range(num_links - 1):
-        xml.append(f'    <exclude body1="link_{i}" body2="link_{i+1}"/>')
-    xml.append('  </contact>')
+    # base sites on link_0 near proximal
+    r0 = cable_r(0)
+    e0 = eps_x(0)
+    zS0 = site_z(0)
+    link_sites[0].append(f'<site name="site_left_base"  pos="{_fmt((e0, +r0, zS0))}" size="{_fmt((0.0015 * scale_at(0),))}" />')
+    link_sites[0].append(f'<site name="site_right_base" pos="{_fmt((e0, -r0, zS0))}" size="{_fmt((0.0015 * scale_at(0),))}" />')
+    left_path.append('<site site="site_left_base" />')
+    right_path.append('<site site="site_right_base" />')
 
-    # ---------- worldbody ----------
-    xml.append('  <worldbody>')
-    xml.append(
-        '    <geom name="floor" type="plane" pos="0 0 0" size="5 5 0.1" rgba="0.8 0.8 0.8 1"/>'
-    )
+    # joint kink sites
+    for i in range(n_segments - 1):
+        Li, _, _ = dims_at(i)
+        rip = cable_r(i)
+        ric = cable_r(i + 1)
+        epi = eps_x(i)
+        epc = eps_x(i + 1)
+        zpi = site_z(i)
+        zci = site_z(i + 1)
 
-    total_len = sum(link_lengths)
-    R_approx = total_len / (2.0 * math.pi)
+        lp = f"site_left_p_{i}"
+        rp = f"site_right_p_{i}"
+        lc = f"site_left_c_{i}"
+        rc = f"site_right_c_{i}"
 
-    base_z = thickness / 2.0
-    base_x = -R_approx
-    base_y = 0.0
+        link_sites[i].append(f'<site name="{lp}" pos="{_fmt((Li - epi, +rip, zpi))}" size="{_fmt((0.0015 * scale_at(i),))}" />')
+        link_sites[i].append(f'<site name="{rp}" pos="{_fmt((Li - epi, -rip, zpi))}" size="{_fmt((0.0015 * scale_at(i),))}" />')
+        link_sites[i + 1].append(f'<site name="{lc}" pos="{_fmt((epc, +ric, zci))}" size="{_fmt((0.0015 * scale_at(i+1),))}" />')
+        link_sites[i + 1].append(f'<site name="{rc}" pos="{_fmt((epc, -ric, zci))}" size="{_fmt((0.0015 * scale_at(i+1),))}" />')
 
-    xml.append(f'    <body name="base" pos="{base_x:.6f} {base_y:.6f} {base_z:.6f}">')
-    xml.append('      <geom type="sphere" size="0.015" rgba="0.3 0.3 0.3 1"/>')
-    xml.append(f'      <site name="tendon_left_base"  pos="0 {base_radius:.6f} 0" size="0.002"/>')
-    xml.append(f'      <site name="tendon_right_base" pos="0 {-base_radius:.6f} 0" size="0.002"/>')
+        left_path.append(f'<site site="{lp}" />')
+        left_path.append(f'<site site="{lc}" />')
+        right_path.append(f'<site site="{rp}" />')
+        right_path.append(f'<site site="{rc}" />')
 
-    indent = "      "
+    # tip anchors
+    last = n_segments - 1
+    Llast = dims_at(last)[0]
+    rlast = cable_r(last)
+    elast = eps_x(last)
+    zlast = site_z(last)
+    link_sites[last].append(f'<site name="site_left_tip"  pos="{_fmt((Llast - elast, +rlast, zlast))}" size="{_fmt((0.0018 * scale_at(last),))}" />')
+    link_sites[last].append(f'<site name="site_right_tip" pos="{_fmt((Llast - elast, -rlast, zlast))}" size="{_fmt((0.0018 * scale_at(last),))}" />')
+    left_path.append('<site site="site_left_tip" />')
+    right_path.append('<site site="site_right_tip" />')
 
-    # Плечо троса:
-    # - основание сильно усиливаем
-    # - кончик сильно ослабляем
-    ARM_BASE = 1.65
-    ARM_TIP = 0.40
+    # rest length estimate in straight pose
+    lengths = [dims_at(i)[0] for i in range(n_segments)]
+    x_origin = [0.0] * n_segments
+    x_origin[0] = bx
+    for i in range(1, n_segments):
+        x_origin[i] = x_origin[i - 1] + lengths[i - 1]
+    y_origin = [by] * n_segments
+    z_origin = [bz + z0] * n_segments
 
-    for i in range(num_links):
-        L = link_lengths[i]
-        W = link_widths[i]
-        body_name = f"link_{i}"
-        joint_name = f"joint_{i}"
-        geom_name = f"link_geom_{i}"
-        mesh_name = f"hex_{i}"
+    site_pos_world = {}
+
+    def add_site_world(link_i: int, name: str, local: Tuple[float, float, float]) -> None:
+        site_pos_world[name] = (x_origin[link_i] + local[0], y_origin[link_i] + local[1], z_origin[link_i] + local[2])
+
+    add_site_world(0, "site_left_base", (e0, +r0, zS0))
+    add_site_world(0, "site_right_base", (e0, -r0, zS0))
+    for i in range(n_segments - 1):
+        Li = dims_at(i)[0]
+        rip = cable_r(i)
+        ric = cable_r(i + 1)
+        epi = eps_x(i)
+        epc = eps_x(i + 1)
+        zpi = site_z(i)
+        zci = site_z(i + 1)
+        add_site_world(i,     f"site_left_p_{i}",  (Li - epi, +rip, zpi))
+        add_site_world(i,     f"site_right_p_{i}", (Li - epi, -rip, zpi))
+        add_site_world(i + 1, f"site_left_c_{i}",  (epc, +ric, zci))
+        add_site_world(i + 1, f"site_right_c_{i}", (epc, -ric, zci))
+    add_site_world(last, "site_left_tip", (Llast - elast, +rlast, zlast))
+    add_site_world(last, "site_right_tip", (Llast - elast, -rlast, zlast))
+
+    def extract_site_names(path_tags: List[str]) -> List[str]:
+        out = []
+        for tag in path_tags:
+            parts = tag.split('"')
+            if len(parts) >= 2:
+                out.append(parts[1])
+        return out
+
+    def path_len(names: List[str]) -> float:
+        L = 0.0
+        for i in range(len(names) - 1):
+            p = site_pos_world[names[i]]
+            q2 = site_pos_world[names[i + 1]]
+            dx = q2[0] - p[0]
+            dy = q2[1] - p[1]
+            dz = q2[2] - p[2]
+            L += math.sqrt(dx * dx + dy * dy + dz * dz)
+        return L
+
+    left_rest = path_len(extract_site_names(left_path))
+    right_rest = path_len(extract_site_names(right_path))
+    left_spring = max(0.0, left_rest * (1.0 - pretension_frac))
+    right_spring = max(0.0, right_rest * (1.0 - pretension_frac))
+
+    # mesh assets: same OBJ, per-link scale (L,W,T)
+    mesh_assets = []
+    for i in range(n_segments):
+        L, W, T = dims_at(i)
+        mesh_assets.append(f'<mesh name="mesh_link_{i}" file="{mesh_obj_path}" scale="{_fmt((L, W, T))}" />')
+
+    # exclude adjacent self-collisions
+    exclude_xml = []
+    for i in range(n_segments - 1):
+        exclude_xml.append(f'<exclude body1="link_{i}" body2="link_{i+1}" />')
+
+    rgba_link = (0.75, 0.75, 0.80, 1.0)
+    rgba_tip = (0.85, 0.85, 0.95, 1.0)
+
+    def body_xml(i: int) -> str:
+        L, _, _ = dims_at(i)
+        m, inertia = inertial_at(i)
+        k = stiffness_at(i)
+        d = damping_at(i)
+        arm = armature_at(i)
 
         if i == 0:
-            pos_str = "0 0 0"
+            pos = (bx, by, bz + z0)
         else:
-            prev_L = link_lengths[i - 1]
-            pos_str = f"{prev_L:.6f} 0 0"
+            pos = (dims_at(i - 1)[0], 0.0, 0.0)
 
-        # БАЗОВОЕ СОСТОЯНИЕ ПРЯМОЕ: quat не задаём
-        xml.append(f'{indent}<body name="{body_name}" pos="{pos_str}">')
+        geom_rgba = rgba_tip if i == (n_segments - 1) else rgba_link
 
-        xml.append(
-            f'{indent}  <joint name="{joint_name}" type="hinge" axis="0 0 1" pos="0 0 0" '
-            f'range="{joint_range_min[i]:.1f} {joint_range_max[i]:.1f}" '
-            f'stiffness="{joint_stiffness[i]:.5f}" damping="{joint_damping[i]:.5f}" frictionloss="{joint_fric[i]:.5f}"/>'
+        joint = (
+            f'<joint name="hinge_{i}" type="hinge" axis="0 0 1" pos="0 0 0" '
+            f'stiffness="{_fmt(k)}" damping="{_fmt(d)}" armature="{_fmt(arm)}" />'
+        )
+        inertial = f'<inertial pos="{_fmt((0.5 * L, 0.0, 0.0))}" mass="{_fmt(m)}" diaginertia="{_fmt(inertia)}" />'
+        geom = (
+            f'<geom name="geom_{i}" type="mesh" mesh="mesh_link_{i}" '
+            f'friction="{_fmt(link_friction)}" solref="{_fmt(solref)}" solimp="{_fmt(solimp)}" rgba="{_fmt(geom_rgba)}" '
+            f'contype="1" conaffinity="1" />'
+        )
+        sites = "\n".join(link_sites[i])
+
+        inner = ""
+        if i + 1 < n_segments:
+            inner = "\n" + body_xml(i + 1) + "\n"
+
+        return (
+            f'<body name="link_{i}" pos="{_fmt(pos)}">\n'
+            f'{inertial}\n{joint}\n{geom}\n{sites}{inner}'
+            f'</body>'
         )
 
-        xml.append(
-            f'{indent}  <geom name="{geom_name}" type="mesh" mesh="{mesh_name}" pos="0 0 0" '
-            f'density="{link_density:.1f}" margin="0.003" gap="0.001"/>'
-        )
+    chain = body_xml(0)
 
-        # sites для троса
-        half_L = 0.5 * L
-        t = i / max(num_links - 1, 1)
+    xml = f"""<mujoco model="spirob_2cable_spiral">
+  <compiler angle="radian" coordinate="local" inertiafromgeom="false" />
+  <option timestep="{1.0/steps_per_second:.8g}" gravity="0 0 -9.81" iterations="80" solver="Newton" />
+  <size njmax="8000" nconmax="4000" />
 
-        arm_factor = ARM_BASE * (1.0 - t) + ARM_TIP * t
-        if arm_factor > 1.75:
-            arm_factor = 1.75
-        if arm_factor < 0.35:
-            arm_factor = 0.35
+  <default>
+    <joint limited="false" />
+    <geom density="0" />
+    <site rgba="0 0 0 0" />
+    <motor ctrlrange="-1 1" ctrllimited="true" />
+  </default>
 
-        y_off = 0.5 * W * arm_factor
+  <asset>
+    <texture name="texgrid" type="2d" builtin="checker" width="512" height="512" rgb1="0.2 0.2 0.2" rgb2="0.25 0.25 0.25" />
+    <material name="matgrid" texture="texgrid" texrepeat="8 8" reflectance="0.0" rgba="1 1 1 1" />
+    {"".join(mesh_assets)}
+  </asset>
 
-        xml.append(f'{indent}  <site name="tendon_left_{i}"  pos="{half_L:.6f} {y_off:.6f} 0" size="0.002"/>')
-        xml.append(f'{indent}  <site name="tendon_right_{i}" pos="{half_L:.6f} {-y_off:.6f} 0" size="0.002"/>')
+  <worldbody>
+    <geom name="floor" type="plane" pos="0 0 0" size="5 5 0.1" material="matgrid"
+          friction="{_fmt(ground_friction)}" solref="{_fmt(solref)}" solimp="{_fmt(solimp)}" contype="1" conaffinity="1" />
+    {chain}
+  </worldbody>
 
-        indent += "  "
+  <contact>
+    {"".join(exclude_xml)}
+  </contact>
 
-    for _ in range(num_links):
-        indent = indent[:-2]
-        xml.append(f'{indent}</body>')
-    xml.append('    </body>')
+  <tendon>
+    <spatial name="tendon_left" width="{tendon_width:.8g}" stiffness="{tendon_stiffness:.8g}" damping="{tendon_damping:.8g}"
+             springlength="{left_spring:.8g}" rgba="{_fmt(tendon_rgba_left)}">
+      {"".join(left_path)}
+    </spatial>
+    <spatial name="tendon_right" width="{tendon_width:.8g}" stiffness="{tendon_stiffness:.8g}" damping="{tendon_damping:.8g}"
+             springlength="{right_spring:.8g}" rgba="{_fmt(tendon_rgba_right)}">
+      {"".join(right_path)}
+    </spatial>
+  </tendon>
 
-    # ---------- объект-шар ----------
-    OBJ_RADIUS_VIS = 0.01
-    OBJ_RADIUS_COLL = 0.018
+  <actuator>
+    <motor name="motor_left" tendon="tendon_left" gear="{motor_gear:.8g}" />
+    <motor name="motor_right" tendon="tendon_right" gear="{motor_gear:.8g}" />
+  </actuator>
 
-    obj_x_rel = 0.75
-    obj_x = base_x + total_len * obj_x_rel
-    obj_y = (base_radius + OBJ_RADIUS_COLL) * 1.35
-    obj_z = OBJ_RADIUS_COLL
-
-    xml.append(f'    <body name="obj_sphere" pos="{obj_x:.6f} {obj_y:.6f} {obj_z:.6f}">')
-    xml.append('      <joint name="obj_sphere_free" type="free"/>')
-    xml.append(
-        f'      <geom name="obj_sphere_col" type="sphere" size="{OBJ_RADIUS_COLL:.6f}" '
-        'density="2000" friction="1.0 0.4 0.03" margin="0.004" gap="0.001" rgba="0 0 0 0"/>'
-    )
-    xml.append(
-        f'      <geom name="obj_sphere_vis" type="sphere" size="{OBJ_RADIUS_VIS:.6f}" '
-        'contype="0" conaffinity="0" rgba="0 1 0 1"/>'
-    )
-    xml.append('    </body>')
-
-    xml.append('  </worldbody>')
-
-    # ---------- tendons ----------
-    xml.append('  <tendon>')
-    xml.append('    <spatial name="tendon_left" limited="false" width="0.002">')
-    xml.append('      <site site="tendon_left_base"/>')
-    for i in range(num_links):
-        xml.append(f'      <site site="tendon_left_{i}"/>')
-    xml.append('    </spatial>')
-
-    xml.append('    <spatial name="tendon_right" limited="false" width="0.002">')
-    xml.append('      <site site="tendon_right_base"/>')
-    for i in range(num_links):
-        xml.append(f'      <site site="tendon_right_{i}"/>')
-    xml.append('    </spatial>')
-    xml.append('  </tendon>')
-
-    # ---------- actuators ----------
-    xml.append('  <actuator>')
-    xml.append(
-        f'    <motor name="motor_left"  tendon="tendon_left"  gear="{motor_gear:.3f}" '
-        'ctrllimited="true" ctrlrange="-1 1"/>'
-    )
-    xml.append(
-        f'    <motor name="motor_right" tendon="tendon_right" gear="{motor_gear:.3f}" '
-        'ctrllimited="true" ctrlrange="-1 1"/>'
-    )
-    xml.append('  </actuator>')
-
-    xml.append('</mujoco>')
-    return "\n".join(xml)
-
-
-if __name__ == "__main__":
-    xml = generate_spiral_tentacle_xml()
-    with open("spiral_tentacle_hex.xml", "w", encoding="utf-8") as f:
-        f.write(xml)
-    print("Saved spiral_tentacle_hex.xml")
+  <!-- Spiral metadata: a={a:.6g}, b={b:.6g}, Δθ={delta_theta:.6g} rad, q={q:.6g}, α={taper_angle_deg:.6g} deg -->
+</mujoco>
+"""
+    return xml

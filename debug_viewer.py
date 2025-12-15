@@ -1,19 +1,12 @@
 # debug_viewer.py
 #
-# Просмотр щупальцы и ручное управление двумя тросами.
-# Поддержка русской раскладки: Ф/Я/Л/Ь.
-#
-# Клавиши:
-#   Левый трос:  A(Ф) увеличить, Z(Я) уменьшить
-#   Правый трос: K(Л) увеличить, M(Ь) уменьшить
-#   Space: сбросить оба мотора в 0
-#   [ / ] : уменьшить / увеличить STEP (шаг изменения команды)
-#   Esc: выход
+# Просмотр формы щупальцы и ручное управление двумя тросами.
 
 import time
+
 import mujoco
 import mujoco.viewer
-from pynput import keyboard
+from pynput import keyboard  # pip install pynput
 
 from generate_spiral_xml import generate_spiral_tentacle_xml
 
@@ -21,98 +14,62 @@ from generate_spiral_xml import generate_spiral_tentacle_xml
 left_cmd = 0.0
 right_cmd = 0.0
 
-STEP = 0.10
+# Чуть меньший шаг, чтобы руками не делать адские рывки.
+STEP = 0.1
 CMD_MIN = -1.0
 CMD_MAX = 1.0
 
-# Сколько шагов физики делать на один кадр viewer
-SUBSTEPS = 8
-
 
 def clip_cmd(v: float) -> float:
-    if v < CMD_MIN:
-        return CMD_MIN
-    if v > CMD_MAX:
-        return CMD_MAX
-    return v
-
-
-def print_state(prefix: str = "") -> None:
-    print(f"{prefix}left_cmd={left_cmd:.3f} right_cmd={right_cmd:.3f} STEP={STEP:.3f}")
+    return max(CMD_MIN, min(CMD_MAX, v))
 
 
 def on_press(key):
-    global left_cmd, right_cmd, STEP
+    global left_cmd, right_cmd
 
-    # Спец-клавиши
-    if key == keyboard.Key.space:
-        left_cmd = 0.0
-        right_cmd = 0.0
-        print_state("reset: ")
-        return
-
-    if key == keyboard.Key.esc:
-        # pynput listener остановится сам после закрытия окна viewer
-        print("ESC pressed: close viewer window to exit.")
-        return
-
-    # Символ
     try:
         ch = key.char
     except AttributeError:
         ch = None
 
-    if not ch:
-        return
-
-    ch = ch.lower()
-
-    # EN + RU раскладки
-    # A Z K M  ->  Ф Я Л Ь
-    if ch in ("a", "ф"):
+    if ch == "a":
         left_cmd = clip_cmd(left_cmd + STEP)
-        print_state()
-    elif ch in ("z", "я"):
+        print(f"left_cmd = {left_cmd:.2f}, right_cmd = {right_cmd:.2f}")
+    elif ch == "z":
         left_cmd = clip_cmd(left_cmd - STEP)
-        print_state()
-    elif ch in ("k", "л"):
+        print(f"left_cmd = {left_cmd:.2f}, right_cmd = {right_cmd:.2f}")
+    elif ch == "k":
         right_cmd = clip_cmd(right_cmd + STEP)
-        print_state()
-    elif ch in ("m", "ь"):
+        print(f"left_cmd = {left_cmd:.2f}, right_cmd = {right_cmd:.2f}")
+    elif ch == "m":
         right_cmd = clip_cmd(right_cmd - STEP)
-        print_state()
-
-    # STEP change
-    elif ch == "[":
-        STEP = max(0.005, STEP * 0.8)
-        print_state("step: ")
-    elif ch == "]":
-        STEP = min(0.8, STEP * 1.25)
-        print_state("step: ")
+        print(f"left_cmd = {left_cmd:.2f}, right_cmd = {right_cmd:.2f}")
+    elif key == keyboard.Key.space:
+        left_cmd = 0.0
+        right_cmd = 0.0
+        print("reset motors to 0.0  0.0")
 
 
 def main():
     global left_cmd, right_cmd
 
     xml = generate_spiral_tentacle_xml()
+
     model = mujoco.MjModel.from_xml_string(xml)
     data = mujoco.MjData(model)
-    mujoco.mj_resetDataKeyframe(model, data, 0)
 
+    act_left_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_ACTUATOR, "motor_left"
+    )
+    act_right_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_ACTUATOR, "motor_right"
+    )
 
-    act_left_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "motor_left")
-    act_right_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "motor_right")
-
-    if act_left_id < 0 or act_right_id < 0:
-        raise RuntimeError("Actuators motor_left/motor_right not found in model.")
-
-    print("MuJoCo viewer: ручное управление щупальцей (EN + RU раскладка).")
-    print("  Левый трос:  A(Ф) +, Z(Я) -")
-    print("  Правый трос: K(Л) +, M(Ь) -")
-    print("  SPACE: сбросить оба мотора в 0")
-    print("  [ / ]: изменить STEP")
-    print("  ESC: подсказка (закрой окно viewer для выхода)")
-    print_state("init: ")
+    print("MuJoCo viewer: ручное управление щупальцей.")
+    print("  A / Z - увеличить / уменьшить левый трос (motor_left)")
+    print("  K / M - увеличить / уменьшить правый трос (motor_right)")
+    print("  SPACE - сбросить оба мотора в 0")
+    print("Закрой окно viewer, чтобы выйти.")
 
     listener = keyboard.Listener(on_press=on_press)
     listener.start()
@@ -122,11 +79,12 @@ def main():
             data.ctrl[act_left_id] = left_cmd
             data.ctrl[act_right_id] = right_cmd
 
-            for _ in range(SUBSTEPS):
+            # несколько шагов физики на один кадр viewer
+            for _ in range(3):
                 mujoco.mj_step(model, data)
 
             viewer.sync()
-            time.sleep(0.01)
+            time.sleep(0.003)
 
     listener.stop()
 

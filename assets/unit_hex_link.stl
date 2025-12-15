@@ -1,0 +1,142 @@
+solid spirob_unit_hex
+  facet normal 0 0 -0.24630542
+    outer loop
+      vertex 1 0 -0.5
+      vertex 0.36945813 0.5 -0.5
+      vertex 0.86206897 0.5 -0.5
+    endloop
+  endfacet
+  facet normal 0 0 -0.5
+    outer loop
+      vertex 1 0 -0.5
+      vertex 0 0 -0.5
+      vertex 0.36945813 0.5 -0.5
+    endloop
+  endfacet
+  facet normal -0 0 -0.5
+    outer loop
+      vertex 1 0 -0.5
+      vertex 0.36945813 -0.5 -0.5
+      vertex 0 0 -0.5
+    endloop
+  endfacet
+  facet normal 0 0 -0.24630542
+    outer loop
+      vertex 1 0 -0.5
+      vertex 0.86206897 -0.5 -0.5
+      vertex 0.36945813 -0.5 -0.5
+    endloop
+  endfacet
+  facet normal 0 0 0.24630542
+    outer loop
+      vertex 1 0 0.5
+      vertex 0.86206897 0.5 0.5
+      vertex 0.36945813 0.5 0.5
+    endloop
+  endfacet
+  facet normal 0 0 0.5
+    outer loop
+      vertex 1 0 0.5
+      vertex 0.36945813 0.5 0.5
+      vertex 0 0 0.5
+    endloop
+  endfacet
+  facet normal 0 0 0.5
+    outer loop
+      vertex 1 0 0.5
+      vertex 0 0 0.5
+      vertex 0.36945813 -0.5 0.5
+    endloop
+  endfacet
+  facet normal 0 0 0.24630542
+    outer loop
+      vertex 1 0 0.5
+      vertex 0.36945813 -0.5 0.5
+      vertex 0.86206897 -0.5 0.5
+    endloop
+  endfacet
+  facet normal 0.5 0.13793103 0
+    outer loop
+      vertex 1 0 -0.5
+      vertex 0.86206897 0.5 -0.5
+      vertex 0.86206897 0.5 0.5
+    endloop
+  endfacet
+  facet normal 0.5 0.13793103 -0
+    outer loop
+      vertex 1 0 -0.5
+      vertex 0.86206897 0.5 0.5
+      vertex 1 0 0.5
+    endloop
+  endfacet
+  facet normal 0 0.49261084 0
+    outer loop
+      vertex 0.86206897 0.5 -0.5
+      vertex 0.36945813 0.5 -0.5
+      vertex 0.36945813 0.5 0.5
+    endloop
+  endfacet
+  facet normal 0 0.49261084 -0
+    outer loop
+      vertex 0.86206897 0.5 -0.5
+      vertex 0.36945813 0.5 0.5
+      vertex 0.86206897 0.5 0.5
+    endloop
+  endfacet
+  facet normal -0.5 0.36945813 0
+    outer loop
+      vertex 0.36945813 0.5 -0.5
+      vertex 0 0 -0.5
+      vertex 0 0 0.5
+    endloop
+  endfacet
+  facet normal -0.5 0.36945813 0
+    outer loop
+      vertex 0.36945813 0.5 -0.5
+      vertex 0 0 0.5
+      vertex 0.36945813 0.5 0.5
+    endloop
+  endfacet
+  facet normal -0.5 -0.36945813 0
+    outer loop
+      vertex 0 0 -0.5
+      vertex 0.36945813 -0.5 -0.5
+      vertex 0.36945813 -0.5 0.5
+    endloop
+  endfacet
+  facet normal -0.5 -0.36945813 0
+    outer loop
+      vertex 0 0 -0.5
+      vertex 0.36945813 -0.5 0.5
+      vertex 0 0 0.5
+    endloop
+  endfacet
+  facet normal 0 -0.49261084 0
+    outer loop
+      vertex 0.36945813 -0.5 -0.5
+      vertex 0.86206897 -0.5 -0.5
+      vertex 0.86206897 -0.5 0.5
+    endloop
+  endfacet
+  facet normal 0 -0.49261084 0
+    outer loop
+      vertex 0.36945813 -0.5 -0.5
+      vertex 0.86206897 -0.5 0.5
+      vertex 0.36945813 -0.5 0.5
+    endloop
+  endfacet
+  facet normal 0.5 -0.13793103 0
+    outer loop
+      vertex 0.86206897 -0.5 -0.5
+      vertex 1 0 -0.5
+      vertex 1 0 0.5
+    endloop
+  endfacet
+  facet normal 0.5 -0.13793103 0
+    outer loop
+      vertex 0.86206897 -0.5 -0.5
+      vertex 1 0 0.5
+      vertex 0.86206897 -0.5 0.5
+    endloop
+  endfacet
+endsolid spirob_unit_hex
