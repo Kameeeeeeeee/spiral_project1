@@ -1,8 +1,12 @@
 # debug_viewer.py
 #
 # Viewer + ручное управление катушками (spool) для двух тросов.
-# Добавлено:
-# - Печать статусов моторов/тросов/катушек с ограничением частоты вывода.
+#
+# Все актуальные изменения:
+# - Печать статусов моторов/тросов/катушек (10 Гц).
+# - Lmax_frac увеличен до 0.65, чтобы дать больше укорочения троса и сильнее сворачивание.
+# - Остальная физика: распределенные потери по тросу (stick-slip), физичная внешняя коррекция
+#   (клип |tau_corr|, запрет генерации энергии tau*v>0, шум и домен-рандомизация только в этом блоке).
 #
 # Управление:
 # a/z: left spool speed +/-
@@ -37,13 +41,15 @@ class SpoolController:
 
     v_max: float = 0.085
 
-    Lmax_frac: float = 0.52
+    # Увеличили, чтобы дать больше максимального укорочения троса.
+    Lmax_frac: float = 0.65
     Lmax_left: float = 0.0
     Lmax_right: float = 0.0
 
     l_rest_left: float = 0.0
     l_rest_right: float = 0.0
 
+    # PD по длине -> натяжение (tension-only).
     kp: float = 6000.0
     kd: float = 150.0
 
@@ -51,6 +57,7 @@ class SpoolController:
     v_left: float = 0.0
     v_right: float = 0.0
 
+    # Параметры распределенного трения (stick-slip).
     mu_s: float = 0.18
     mu_k: float = 0.14
     N0: float = 0.15
@@ -58,6 +65,7 @@ class SpoolController:
     k_c: float = 0.30
     c_v: float = 0.22
 
+    # Релаксация натяжения.
     tau_T: float = 0.25
 
     T_left: list[float] | None = None
@@ -120,6 +128,7 @@ def propagate_tension(
     T_prev: list[float],
     dt: float,
 ) -> list[float]:
+    # Дискретная модель T(s) с stick-slip и релаксацией, без генерации "ложной" энергии.
     T = T_prev[:]
     T[0] = max(0.0, T_base)
 
@@ -301,7 +310,7 @@ def main() -> None:
                     flags[geom_to_seg[g2]] = 1.0
         return flags
 
-    # Ограничение частоты печати статуса
+    # Печать статуса.
     print_hz = 10.0
     next_print_t = 0.0
     last_Tbase_left = 0.0
@@ -379,6 +388,7 @@ def main() -> None:
                     tau_max = _clip(tau_max, float(corr.tau_min), float(corr.tau_cap))
                     tau = _clip(tau, -tau_max, tau_max)
 
+                    # Запрет генерации энергии.
                     if abs(v) > 1e-9 and (tau * v) > 0.0:
                         tau = 0.0
 
@@ -388,7 +398,7 @@ def main() -> None:
 
             viewer.sync()
 
-            # Печать статуса моторов/тросов/катушек
+            # Печать статуса моторов/тросов/катушек.
             sim_t = float(data.time)
             if sim_t >= next_print_t:
                 ctrlL = float(data.ctrl[id_motor_left])
