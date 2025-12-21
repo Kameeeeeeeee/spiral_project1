@@ -1,0 +1,375 @@
+<mujoco model="spiral_tentacle_hex_spirob_2c">
+  <compiler angle="degree" coordinate="local" inertiafromgeom="true" boundmass="0.0001" boundinertia="0.0000001"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast" solver="Newton" iterations="60"/>
+  <default>
+    <joint damping="0.4000" frictionloss="0.0200" springref="0"/>
+    <geom condim="4" solref="0.010 0.90" solimp="0.92 0.99 0.002" friction="1.2 0.03 0.001" margin="0"/>
+  </default>
+  <asset>
+    <material name="mat_tpu" rgba="0.85 0.85 0.88 1"/>
+    <material name="mat_floor" rgba="0.78 0.78 0.78 1"/>
+    <material name="mat_obj" rgba="0 1 0 1"/>
+    <mesh name="hex_base" file="assets/hex_base.obj"/>
+    <mesh name="hex_0" file="assets/hex_base.obj" scale="0.052254 0.024360 0.010000"/>
+    <mesh name="hex_1" file="assets/hex_base.obj" scale="0.046569 0.021710 0.010000"/>
+    <mesh name="hex_2" file="assets/hex_base.obj" scale="0.041502 0.019347 0.010000"/>
+    <mesh name="hex_3" file="assets/hex_base.obj" scale="0.036986 0.017242 0.010000"/>
+    <mesh name="hex_4" file="assets/hex_base.obj" scale="0.032962 0.015366 0.010000"/>
+    <mesh name="hex_5" file="assets/hex_base.obj" scale="0.029376 0.013694 0.010000"/>
+    <mesh name="hex_6" file="assets/hex_base.obj" scale="0.026179 0.012204 0.010000"/>
+    <mesh name="hex_7" file="assets/hex_base.obj" scale="0.023331 0.010876 0.010000"/>
+    <mesh name="hex_8" file="assets/hex_base.obj" scale="0.020792 0.009693 0.010000"/>
+    <mesh name="hex_9" file="assets/hex_base.obj" scale="0.018530 0.008638 0.010000"/>
+    <mesh name="hex_10" file="assets/hex_base.obj" scale="0.016514 0.007698 0.010000"/>
+    <mesh name="hex_11" file="assets/hex_base.obj" scale="0.014717 0.006861 0.010000"/>
+    <mesh name="hex_12" file="assets/hex_base.obj" scale="0.013116 0.006114 0.010000"/>
+    <mesh name="hex_13" file="assets/hex_base.obj" scale="0.011689 0.005449 0.010000"/>
+    <mesh name="hex_14" file="assets/hex_base.obj" scale="0.010417 0.004856 0.010000"/>
+    <mesh name="hex_15" file="assets/hex_base.obj" scale="0.009284 0.004328 0.010000"/>
+    <mesh name="hex_16" file="assets/hex_base.obj" scale="0.008273 0.003857 0.010000"/>
+    <mesh name="hex_17" file="assets/hex_base.obj" scale="0.007373 0.003437 0.010000"/>
+    <mesh name="hex_18" file="assets/hex_base.obj" scale="0.006571 0.003063 0.010000"/>
+    <mesh name="hex_19" file="assets/hex_base.obj" scale="0.005856 0.002730 0.010000"/>
+    <mesh name="hex_20" file="assets/hex_base.obj" scale="0.005219 0.002433 0.010000"/>
+    <mesh name="hex_21" file="assets/hex_base.obj" scale="0.004651 0.002168 0.010000"/>
+    <mesh name="hex_22" file="assets/hex_base.obj" scale="0.004145 0.001932 0.010000"/>
+    <mesh name="hex_23" file="assets/hex_base.obj" scale="0.003694 0.001722 0.010000"/>
+  </asset>
+  <worldbody>
+    <geom name="floor" type="plane" size="2 2 0.1" material="mat_floor" friction="1.0 0.02 0.001" solref="0.012 0.95" solimp="0.95 0.99 0.002"/>
+    <body name="base" pos="-0.071620 0 0.015000">
+      <geom type="sphere" size="0.03" rgba="0.3 0.3 0.3 1" contype="0" conaffinity="0"/>
+      <site name="tendon_left_base"  pos="0 0.030000 0" size="0.002"/>
+      <site name="tendon_right_base" pos="0 -0.030000 0" size="0.002"/>
+      <body name="link_0" pos="0 0 0">
+        <joint name="joint_0" type="hinge" axis="0 0 1" pos="0 0 0" range="-40.0 40.0" stiffness="40.000"/>
+        <geom name="link_geom_0" type="mesh" mesh="hex_0" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.004200"/>
+        <site name="tendon_left_0"  pos="0.026127 0.012000 0" size="0.002"/>
+        <site name="tendon_right_0" pos="0.026127 -0.012000 0" size="0.002"/>
+        <body name="link_1" pos="0.052254 0 0">
+          <joint name="joint_1" type="hinge" axis="0 0 1" pos="0 0 0" range="-46.1 46.1" stiffness="35.115"/>
+          <geom name="link_geom_1" type="mesh" mesh="hex_1" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.003743"/>
+          <site name="tendon_left_1"  pos="0.023284 0.011276 0" size="0.002"/>
+          <site name="tendon_right_1" pos="0.023284 -0.011276 0" size="0.002"/>
+          <body name="link_2" pos="0.046569 0 0">
+            <joint name="joint_2" type="hinge" axis="0 0 1" pos="0 0 0" range="-52.2 52.2" stiffness="30.827"/>
+            <geom name="link_geom_2" type="mesh" mesh="hex_2" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.003336"/>
+            <site name="tendon_left_2"  pos="0.020751 0.010567 0" size="0.002"/>
+            <site name="tendon_right_2" pos="0.020751 -0.010567 0" size="0.002"/>
+            <body name="link_3" pos="0.041502 0 0">
+              <joint name="joint_3" type="hinge" axis="0 0 1" pos="0 0 0" range="-58.3 58.3" stiffness="27.062"/>
+              <geom name="link_geom_3" type="mesh" mesh="hex_3" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.002973"/>
+              <site name="tendon_left_3"  pos="0.018493 0.009879 0" size="0.002"/>
+              <site name="tendon_right_3" pos="0.018493 -0.009879 0" size="0.002"/>
+              <body name="link_4" pos="0.036986 0 0">
+                <joint name="joint_4" type="hinge" axis="0 0 1" pos="0 0 0" range="-64.3 64.3" stiffness="23.757"/>
+                <geom name="link_geom_4" type="mesh" mesh="hex_4" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.002649"/>
+                <site name="tendon_left_4"  pos="0.016481 0.009215 0" size="0.002"/>
+                <site name="tendon_right_4" pos="0.016481 -0.009215 0" size="0.002"/>
+                <body name="link_5" pos="0.032962 0 0">
+                  <joint name="joint_5" type="hinge" axis="0 0 1" pos="0 0 0" range="-70.4 70.4" stiffness="20.856"/>
+                  <geom name="link_geom_5" type="mesh" mesh="hex_5" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.002361"/>
+                  <site name="tendon_left_5"  pos="0.014688 0.008579 0" size="0.002"/>
+                  <site name="tendon_right_5" pos="0.014688 -0.008579 0" size="0.002"/>
+                  <body name="link_6" pos="0.029376 0 0">
+                    <joint name="joint_6" type="hinge" axis="0 0 1" pos="0 0 0" range="-76.5 76.5" stiffness="18.309"/>
+                    <geom name="link_geom_6" type="mesh" mesh="hex_6" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.002104"/>
+                    <site name="tendon_left_6"  pos="0.013090 0.007972 0" size="0.002"/>
+                    <site name="tendon_right_6" pos="0.013090 -0.007972 0" size="0.002"/>
+                    <body name="link_7" pos="0.026179 0 0">
+                      <joint name="joint_7" type="hinge" axis="0 0 1" pos="0 0 0" range="-82.6 82.6" stiffness="16.073"/>
+                      <geom name="link_geom_7" type="mesh" mesh="hex_7" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.001875"/>
+                      <site name="tendon_left_7"  pos="0.011665 0.007396 0" size="0.002"/>
+                      <site name="tendon_right_7" pos="0.011665 -0.007396 0" size="0.002"/>
+                      <body name="link_8" pos="0.023331 0 0">
+                        <joint name="joint_8" type="hinge" axis="0 0 1" pos="0 0 0" range="-88.7 88.7" stiffness="14.110"/>
+                        <geom name="link_geom_8" type="mesh" mesh="hex_8" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.001671"/>
+                        <site name="tendon_left_8"  pos="0.010396 0.006851 0" size="0.002"/>
+                        <site name="tendon_right_8" pos="0.010396 -0.006851 0" size="0.002"/>
+                        <body name="link_9" pos="0.020792 0 0">
+                          <joint name="joint_9" type="hinge" axis="0 0 1" pos="0 0 0" range="-94.8 94.8" stiffness="12.387"/>
+                          <geom name="link_geom_9" type="mesh" mesh="hex_9" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.001489"/>
+                          <site name="tendon_left_9"  pos="0.009265 0.006337 0" size="0.002"/>
+                          <site name="tendon_right_9" pos="0.009265 -0.006337 0" size="0.002"/>
+                          <body name="link_10" pos="0.018530 0 0">
+                            <joint name="joint_10" type="hinge" axis="0 0 1" pos="0 0 0" range="-100.9 100.9" stiffness="10.874"/>
+                            <geom name="link_geom_10" type="mesh" mesh="hex_10" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.001327"/>
+                            <site name="tendon_left_10"  pos="0.008257 0.005853 0" size="0.002"/>
+                            <site name="tendon_right_10" pos="0.008257 -0.005853 0" size="0.002"/>
+                            <body name="link_11" pos="0.016514 0 0">
+                              <joint name="joint_11" type="hinge" axis="0 0 1" pos="0 0 0" range="-107.0 107.0" stiffness="9.546"/>
+                              <geom name="link_geom_11" type="mesh" mesh="hex_11" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.001183"/>
+                              <site name="tendon_left_11"  pos="0.007359 0.005400 0" size="0.002"/>
+                              <site name="tendon_right_11" pos="0.007359 -0.005400 0" size="0.002"/>
+                              <body name="link_12" pos="0.014717 0 0">
+                                <joint name="joint_12" type="hinge" axis="0 0 1" pos="0 0 0" range="-113.0 113.0" stiffness="8.380"/>
+                                <geom name="link_geom_12" type="mesh" mesh="hex_12" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.001054"/>
+                                <site name="tendon_left_12"  pos="0.006558 0.004976 0" size="0.002"/>
+                                <site name="tendon_right_12" pos="0.006558 -0.004976 0" size="0.002"/>
+                                <body name="link_13" pos="0.013116 0 0">
+                                  <joint name="joint_13" type="hinge" axis="0 0 1" pos="0 0 0" range="-119.1 119.1" stiffness="7.357"/>
+                                  <geom name="link_geom_13" type="mesh" mesh="hex_13" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.000939"/>
+                                  <site name="tendon_left_13"  pos="0.005844 0.004581 0" size="0.002"/>
+                                  <site name="tendon_right_13" pos="0.005844 -0.004581 0" size="0.002"/>
+                                  <body name="link_14" pos="0.011689 0 0">
+                                    <joint name="joint_14" type="hinge" axis="0 0 1" pos="0 0 0" range="-125.2 125.2" stiffness="6.458"/>
+                                    <geom name="link_geom_14" type="mesh" mesh="hex_14" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.000837"/>
+                                    <site name="tendon_left_14"  pos="0.005208 0.004212 0" size="0.002"/>
+                                    <site name="tendon_right_14" pos="0.005208 -0.004212 0" size="0.002"/>
+                                    <body name="link_15" pos="0.010417 0 0">
+                                      <joint name="joint_15" type="hinge" axis="0 0 1" pos="0 0 0" range="-131.3 131.3" stiffness="5.670"/>
+                                      <geom name="link_geom_15" type="mesh" mesh="hex_15" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.000746"/>
+                                      <site name="tendon_left_15"  pos="0.004642 0.003870 0" size="0.002"/>
+                                      <site name="tendon_right_15" pos="0.004642 -0.003870 0" size="0.002"/>
+                                      <body name="link_16" pos="0.009284 0 0">
+                                        <joint name="joint_16" type="hinge" axis="0 0 1" pos="0 0 0" range="-137.4 137.4" stiffness="4.977"/>
+                                        <geom name="link_geom_16" type="mesh" mesh="hex_16" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.000665"/>
+                                        <site name="tendon_left_16"  pos="0.004137 0.003552 0" size="0.002"/>
+                                        <site name="tendon_right_16" pos="0.004137 -0.003552 0" size="0.002"/>
+                                        <body name="link_17" pos="0.008273 0 0">
+                                          <joint name="joint_17" type="hinge" axis="0 0 1" pos="0 0 0" range="-143.5 143.5" stiffness="4.369"/>
+                                          <geom name="link_geom_17" type="mesh" mesh="hex_17" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.000593"/>
+                                          <site name="tendon_left_17"  pos="0.003687 0.003258 0" size="0.002"/>
+                                          <site name="tendon_right_17" pos="0.003687 -0.003258 0" size="0.002"/>
+                                          <body name="link_18" pos="0.007373 0 0">
+                                            <joint name="joint_18" type="hinge" axis="0 0 1" pos="0 0 0" range="-149.6 149.6" stiffness="3.836"/>
+                                            <geom name="link_geom_18" type="mesh" mesh="hex_18" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.000528"/>
+                                            <site name="tendon_left_18"  pos="0.003286 0.002985 0" size="0.002"/>
+                                            <site name="tendon_right_18" pos="0.003286 -0.002985 0" size="0.002"/>
+                                            <body name="link_19" pos="0.006571 0 0">
+                                              <joint name="joint_19" type="hinge" axis="0 0 1" pos="0 0 0" range="-155.7 155.7" stiffness="3.367"/>
+                                              <geom name="link_geom_19" type="mesh" mesh="hex_19" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.000471"/>
+                                              <site name="tendon_left_19"  pos="0.002928 0.002734 0" size="0.002"/>
+                                              <site name="tendon_right_19" pos="0.002928 -0.002734 0" size="0.002"/>
+                                              <body name="link_20" pos="0.005856 0 0">
+                                                <joint name="joint_20" type="hinge" axis="0 0 1" pos="0 0 0" range="-161.7 161.7" stiffness="2.956"/>
+                                                <geom name="link_geom_20" type="mesh" mesh="hex_20" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.000419"/>
+                                                <site name="tendon_left_20"  pos="0.002609 0.002501 0" size="0.002"/>
+                                                <site name="tendon_right_20" pos="0.002609 -0.002501 0" size="0.002"/>
+                                                <body name="link_21" pos="0.005219 0 0">
+                                                  <joint name="joint_21" type="hinge" axis="0 0 1" pos="0 0 0" range="-167.8 167.8" stiffness="2.595"/>
+                                                  <geom name="link_geom_21" type="mesh" mesh="hex_21" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.000374"/>
+                                                  <site name="tendon_left_21"  pos="0.002326 0.002287 0" size="0.002"/>
+                                                  <site name="tendon_right_21" pos="0.002326 -0.002287 0" size="0.002"/>
+                                                  <body name="link_22" pos="0.004651 0 0">
+                                                    <joint name="joint_22" type="hinge" axis="0 0 1" pos="0 0 0" range="-173.9 173.9" stiffness="2.278"/>
+                                                    <geom name="link_geom_22" type="mesh" mesh="hex_22" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.000333"/>
+                                                    <site name="tendon_left_22"  pos="0.002072 0.002090 0" size="0.002"/>
+                                                    <site name="tendon_right_22" pos="0.002072 -0.002090 0" size="0.002"/>
+                                                    <body name="link_23" pos="0.004145 0 0">
+                                                      <joint name="joint_23" type="hinge" axis="0 0 1" pos="0 0 0" range="-180.0 180.0" stiffness="2.000"/>
+                                                      <geom name="link_geom_23" type="mesh" mesh="hex_23" pos="0 0 0" density="300.0" material="mat_tpu" friction="1.4 0.03 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" margin="0.000297"/>
+                                                      <site name="tendon_left_23"  pos="0.001847 0.001909 0" size="0.002"/>
+                                                      <site name="tendon_right_23" pos="0.001847 -0.001909 0" size="0.002"/>
+                                                    </body>
+                                                  </body>
+                                                </body>
+                                              </body>
+                                            </body>
+                                          </body>
+                                        </body>
+                                      </body>
+                                    </body>
+                                  </body>
+                                </body>
+                              </body>
+                            </body>
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+    <body name="obj_sphere" pos="0.220880 0.010800 0.008000">
+      <joint name="obj_sphere_free" type="free"/>
+      <geom name="obj_sphere_geom" type="sphere" size="0.008000" density="300" friction="1.1 0.02 0.001" solref="0.010 0.90" solimp="0.92 0.99 0.002" condim="4" material="mat_obj"/>
+    </body>
+  </worldbody>
+  <contact>
+    <exclude body1="link_0" body2="link_1"/>
+    <exclude body1="link_1" body2="link_2"/>
+    <exclude body1="link_2" body2="link_3"/>
+    <exclude body1="link_3" body2="link_4"/>
+    <exclude body1="link_4" body2="link_5"/>
+    <exclude body1="link_5" body2="link_6"/>
+    <exclude body1="link_6" body2="link_7"/>
+    <exclude body1="link_7" body2="link_8"/>
+    <exclude body1="link_8" body2="link_9"/>
+    <exclude body1="link_9" body2="link_10"/>
+    <exclude body1="link_10" body2="link_11"/>
+    <exclude body1="link_11" body2="link_12"/>
+    <exclude body1="link_12" body2="link_13"/>
+    <exclude body1="link_13" body2="link_14"/>
+    <exclude body1="link_14" body2="link_15"/>
+    <exclude body1="link_15" body2="link_16"/>
+    <exclude body1="link_16" body2="link_17"/>
+    <exclude body1="link_17" body2="link_18"/>
+    <exclude body1="link_18" body2="link_19"/>
+    <exclude body1="link_19" body2="link_20"/>
+    <exclude body1="link_20" body2="link_21"/>
+    <exclude body1="link_21" body2="link_22"/>
+    <exclude body1="link_22" body2="link_23"/>
+  </contact>
+  <tendon>
+    <spatial name="tendon_left" limited="false" width="0.002">
+      <site site="tendon_left_base"/>
+      <site site="tendon_left_0"/>
+      <site site="tendon_left_1"/>
+      <site site="tendon_left_2"/>
+      <site site="tendon_left_3"/>
+      <site site="tendon_left_4"/>
+      <site site="tendon_left_5"/>
+      <site site="tendon_left_6"/>
+      <site site="tendon_left_7"/>
+      <site site="tendon_left_8"/>
+      <site site="tendon_left_9"/>
+      <site site="tendon_left_10"/>
+      <site site="tendon_left_11"/>
+      <site site="tendon_left_12"/>
+      <site site="tendon_left_13"/>
+      <site site="tendon_left_14"/>
+      <site site="tendon_left_15"/>
+      <site site="tendon_left_16"/>
+      <site site="tendon_left_17"/>
+      <site site="tendon_left_18"/>
+      <site site="tendon_left_19"/>
+      <site site="tendon_left_20"/>
+      <site site="tendon_left_21"/>
+      <site site="tendon_left_22"/>
+      <site site="tendon_left_23"/>
+    </spatial>
+    <spatial name="tendon_right" limited="false" width="0.002">
+      <site site="tendon_right_base"/>
+      <site site="tendon_right_0"/>
+      <site site="tendon_right_1"/>
+      <site site="tendon_right_2"/>
+      <site site="tendon_right_3"/>
+      <site site="tendon_right_4"/>
+      <site site="tendon_right_5"/>
+      <site site="tendon_right_6"/>
+      <site site="tendon_right_7"/>
+      <site site="tendon_right_8"/>
+      <site site="tendon_right_9"/>
+      <site site="tendon_right_10"/>
+      <site site="tendon_right_11"/>
+      <site site="tendon_right_12"/>
+      <site site="tendon_right_13"/>
+      <site site="tendon_right_14"/>
+      <site site="tendon_right_15"/>
+      <site site="tendon_right_16"/>
+      <site site="tendon_right_17"/>
+      <site site="tendon_right_18"/>
+      <site site="tendon_right_19"/>
+      <site site="tendon_right_20"/>
+      <site site="tendon_right_21"/>
+      <site site="tendon_right_22"/>
+      <site site="tendon_right_23"/>
+    </spatial>
+    <spatial name="tendon_left_seg_0" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_base"/><site site="tendon_left_0"/></spatial>
+    <spatial name="tendon_right_seg_0" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_base"/><site site="tendon_right_0"/></spatial>
+    <spatial name="tendon_left_seg_1" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_0"/><site site="tendon_left_1"/></spatial>
+    <spatial name="tendon_right_seg_1" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_0"/><site site="tendon_right_1"/></spatial>
+    <spatial name="tendon_left_seg_2" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_1"/><site site="tendon_left_2"/></spatial>
+    <spatial name="tendon_right_seg_2" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_1"/><site site="tendon_right_2"/></spatial>
+    <spatial name="tendon_left_seg_3" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_2"/><site site="tendon_left_3"/></spatial>
+    <spatial name="tendon_right_seg_3" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_2"/><site site="tendon_right_3"/></spatial>
+    <spatial name="tendon_left_seg_4" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_3"/><site site="tendon_left_4"/></spatial>
+    <spatial name="tendon_right_seg_4" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_3"/><site site="tendon_right_4"/></spatial>
+    <spatial name="tendon_left_seg_5" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_4"/><site site="tendon_left_5"/></spatial>
+    <spatial name="tendon_right_seg_5" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_4"/><site site="tendon_right_5"/></spatial>
+    <spatial name="tendon_left_seg_6" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_5"/><site site="tendon_left_6"/></spatial>
+    <spatial name="tendon_right_seg_6" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_5"/><site site="tendon_right_6"/></spatial>
+    <spatial name="tendon_left_seg_7" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_6"/><site site="tendon_left_7"/></spatial>
+    <spatial name="tendon_right_seg_7" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_6"/><site site="tendon_right_7"/></spatial>
+    <spatial name="tendon_left_seg_8" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_7"/><site site="tendon_left_8"/></spatial>
+    <spatial name="tendon_right_seg_8" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_7"/><site site="tendon_right_8"/></spatial>
+    <spatial name="tendon_left_seg_9" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_8"/><site site="tendon_left_9"/></spatial>
+    <spatial name="tendon_right_seg_9" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_8"/><site site="tendon_right_9"/></spatial>
+    <spatial name="tendon_left_seg_10" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_9"/><site site="tendon_left_10"/></spatial>
+    <spatial name="tendon_right_seg_10" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_9"/><site site="tendon_right_10"/></spatial>
+    <spatial name="tendon_left_seg_11" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_10"/><site site="tendon_left_11"/></spatial>
+    <spatial name="tendon_right_seg_11" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_10"/><site site="tendon_right_11"/></spatial>
+    <spatial name="tendon_left_seg_12" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_11"/><site site="tendon_left_12"/></spatial>
+    <spatial name="tendon_right_seg_12" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_11"/><site site="tendon_right_12"/></spatial>
+    <spatial name="tendon_left_seg_13" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_12"/><site site="tendon_left_13"/></spatial>
+    <spatial name="tendon_right_seg_13" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_12"/><site site="tendon_right_13"/></spatial>
+    <spatial name="tendon_left_seg_14" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_13"/><site site="tendon_left_14"/></spatial>
+    <spatial name="tendon_right_seg_14" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_13"/><site site="tendon_right_14"/></spatial>
+    <spatial name="tendon_left_seg_15" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_14"/><site site="tendon_left_15"/></spatial>
+    <spatial name="tendon_right_seg_15" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_14"/><site site="tendon_right_15"/></spatial>
+    <spatial name="tendon_left_seg_16" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_15"/><site site="tendon_left_16"/></spatial>
+    <spatial name="tendon_right_seg_16" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_15"/><site site="tendon_right_16"/></spatial>
+    <spatial name="tendon_left_seg_17" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_16"/><site site="tendon_left_17"/></spatial>
+    <spatial name="tendon_right_seg_17" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_16"/><site site="tendon_right_17"/></spatial>
+    <spatial name="tendon_left_seg_18" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_17"/><site site="tendon_left_18"/></spatial>
+    <spatial name="tendon_right_seg_18" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_17"/><site site="tendon_right_18"/></spatial>
+    <spatial name="tendon_left_seg_19" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_18"/><site site="tendon_left_19"/></spatial>
+    <spatial name="tendon_right_seg_19" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_18"/><site site="tendon_right_19"/></spatial>
+    <spatial name="tendon_left_seg_20" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_19"/><site site="tendon_left_20"/></spatial>
+    <spatial name="tendon_right_seg_20" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_19"/><site site="tendon_right_20"/></spatial>
+    <spatial name="tendon_left_seg_21" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_20"/><site site="tendon_left_21"/></spatial>
+    <spatial name="tendon_right_seg_21" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_20"/><site site="tendon_right_21"/></spatial>
+    <spatial name="tendon_left_seg_22" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_21"/><site site="tendon_left_22"/></spatial>
+    <spatial name="tendon_right_seg_22" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_21"/><site site="tendon_right_22"/></spatial>
+    <spatial name="tendon_left_seg_23" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_left_22"/><site site="tendon_left_23"/></spatial>
+    <spatial name="tendon_right_seg_23" limited="false" stiffness="0.000000" damping="0.000000" frictionloss="0.150000"><site site="tendon_right_22"/><site site="tendon_right_23"/></spatial>
+  </tendon>
+  <actuator>
+    <motor name="motor_left" tendon="tendon_left" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right" tendon="tendon_right" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_0" tendon="tendon_left_seg_0" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_0" tendon="tendon_right_seg_0" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_1" tendon="tendon_left_seg_1" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_1" tendon="tendon_right_seg_1" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_2" tendon="tendon_left_seg_2" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_2" tendon="tendon_right_seg_2" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_3" tendon="tendon_left_seg_3" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_3" tendon="tendon_right_seg_3" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_4" tendon="tendon_left_seg_4" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_4" tendon="tendon_right_seg_4" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_5" tendon="tendon_left_seg_5" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_5" tendon="tendon_right_seg_5" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_6" tendon="tendon_left_seg_6" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_6" tendon="tendon_right_seg_6" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_7" tendon="tendon_left_seg_7" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_7" tendon="tendon_right_seg_7" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_8" tendon="tendon_left_seg_8" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_8" tendon="tendon_right_seg_8" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_9" tendon="tendon_left_seg_9" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_9" tendon="tendon_right_seg_9" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_10" tendon="tendon_left_seg_10" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_10" tendon="tendon_right_seg_10" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_11" tendon="tendon_left_seg_11" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_11" tendon="tendon_right_seg_11" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_12" tendon="tendon_left_seg_12" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_12" tendon="tendon_right_seg_12" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_13" tendon="tendon_left_seg_13" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_13" tendon="tendon_right_seg_13" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_14" tendon="tendon_left_seg_14" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_14" tendon="tendon_right_seg_14" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_15" tendon="tendon_left_seg_15" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_15" tendon="tendon_right_seg_15" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_16" tendon="tendon_left_seg_16" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_16" tendon="tendon_right_seg_16" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_17" tendon="tendon_left_seg_17" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_17" tendon="tendon_right_seg_17" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_18" tendon="tendon_left_seg_18" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_18" tendon="tendon_right_seg_18" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_19" tendon="tendon_left_seg_19" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_19" tendon="tendon_right_seg_19" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_20" tendon="tendon_left_seg_20" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_20" tendon="tendon_right_seg_20" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_21" tendon="tendon_left_seg_21" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_21" tendon="tendon_right_seg_21" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_22" tendon="tendon_left_seg_22" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_22" tendon="tendon_right_seg_22" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_left_seg_23" tendon="tendon_left_seg_23" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+    <motor name="motor_right_seg_23" tendon="tendon_right_seg_23" gear="1000.000" ctrllimited="true" ctrlrange="-1 1" forcerange="-80.000000 80.000000"/>
+  </actuator>
+</mujoco>
