@@ -63,7 +63,7 @@ class ForceController:
     T_right: float = 0.0  # N
     T_step: float = 2.0   # N per key press
 
-    Tmax: float = 120.0   # N
+    Tmax: float = 210.0   # N
 
     running: bool = True
 
@@ -119,9 +119,9 @@ def main() -> None:
         elif k == "]":
             ctrl.T_step = min(20.0, ctrl.T_step * 1.25)
         elif k == "1":
-            ctrl.T_left, ctrl.T_right = 25.0, 25.0
+            ctrl.T_left, ctrl.T_right = 40.0, 40.0
         elif k == "2":
-            ctrl.T_left, ctrl.T_right = 25.0, 60.0
+            ctrl.T_left, ctrl.T_right = 40.0, 100.0
         elif k == "3":
             ctrl.T_left, ctrl.T_right = 10.0, 60.0
         elif k == "4":

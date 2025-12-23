@@ -9,7 +9,7 @@
 # 5) Кубик спавнится случайно на расстоянии [0.1L, 0.55L] от базы, на той же плоскости, но не на щупальце.
 #
 # ВАЖНО: форма "?" зависит от сценария управления (force sequence), а не от огромной силы.
-# Это реализовано в debug_viewer через пресеты и плавный ramp сил.
+# Это реализовано в debug_viewer через пресеты и плавный ramp сил.ф
 
 from __future__ import annotations
 
@@ -34,25 +34,28 @@ class SpiralParams:
     tip_thickness: float = 0.0024  # увеличенная толщина по z для хватания кубика
 
     # Подъем над полом
-    lift_z: float = 0.010
+    lift_z: float = 0.0
 
     # Сайты троса (плечо момента)
     tendon_offset_frac: float = 0.65  # увеличили плечо, чтобы легче получать "?" при тех же силах
 
     # Механика: градиент податливости правильный (база жестче), но без "удушающей" вязкости
-    k_tip: float = 1.5
-    damping_mul: float = 0.55        # было больше, из-за этого система становилась "в геле"
-    frictionloss_tip: float = 0.003  # было больше, это убивало квазистатику
-    armature_mul: float = 1.2
+    k_tip: float = 0.25
+    damping_mul: float = 0.18        # было больше, из-за этого система становилась "в геле"
+    frictionloss_tip = 0.0006
+    armature_mul: float = 0.05
 
     # Масса на кончике
-    m_tip: float = 2e-6
+    m_tip: float = 2e-4
 
     # Реалистичный привод: ctrl=1 -> 100 Н натяжение
-    motor_gear: float = 120.0
+    motor_gear: float = 210.0
 
-    # Контакт и устойчивость
+    # Контакт и устойчивостьZ
     timestep: float = 0.001
+
+    k_base_factor: float = 1.8       # насколько база жестче кончика
+    fl_base_factor: float = 1.2      # насколько потери у базы выше кончика
 
     # Кубик
     cube_half: float = 0.02
@@ -73,6 +76,22 @@ def _ensure_unit_mesh_obj() -> str:
     from generate_hex_mesh import ensure_unit_hex_mesh_obj  # type: ignore
 
     return ensure_unit_hex_mesh_obj("assets/hex_base.obj")
+
+
+def _obj_x_bounds(obj_path: str) -> tuple[float, float]:
+    xmin = 1e30
+    xmax = -1e30
+    with open(obj_path, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("v "):
+                parts = line.strip().split()
+                if len(parts) >= 4:
+                    x = float(parts[1])
+                    xmin = min(xmin, x)
+                    xmax = max(xmax, x)
+    if xmin > xmax:
+        raise ValueError(f"OBJ has no vertices: {obj_path}")
+    return xmin, xmax
 
 
 def _sample_cube_xy(
@@ -128,9 +147,13 @@ def generate_spiral_tentacle_xml(
     cube_half: float = SpiralParams.cube_half,
     cube_density: float = SpiralParams.cube_density,
     cube_friction: str = SpiralParams.cube_friction,
+    k_base_factor: float = SpiralParams.k_base_factor,       # насколько база жестче кончика
+    fl_base_factor: float = SpiralParams.fl_base_factor,      # насколько потери у базы выше кончика
+
     cube_seed: int | None = None,
 ) -> str:
     unit_obj = _ensure_unit_mesh_obj()
+    unit_xmin, unit_xmax = _obj_x_bounds(unit_obj)
 
     # q = exp(bΔθ), b = cot(ψ)
     delta = math.radians(delta_deg)
@@ -167,12 +190,12 @@ def generate_spiral_tentacle_xml(
     base_z = 0.5 * base_thickness + max(0.0, lift_z)
 
     # Safety против mjMINVAL
-    mass_min = 2e-6
-    inertia_min = 1e-9
+    mass_min = 1e-4
+    inertia_min = 1e-6
 
     # Контакт: быстрый (меньше проникновения), но без чрезмерного "раннего" упора
-    solimp = "0.95 0.95 0.01"
-    solref = "0.003 1.2"
+    solimp = "0.995 0.995 0.0005"
+    solref = "0.0015 1.0"
     friction = "1.0 0.01 0.0001"
 
     meshes_xml: list[str] = []
@@ -193,9 +216,8 @@ def generate_spiral_tentacle_xml(
     frictionloss = [0.0] * n_segments
     armature = [0.0] * n_segments
     scale = [0.0] * n_segments
-
     for i in range(n_segments):
-        # i=0 база, i=N-1 кончик
+
         j = (n_segments - 1) - i  # j=0 tip, j=N-1 base
         s = q**j
         scale[i] = s
@@ -216,42 +238,74 @@ def generate_spiral_tentacle_xml(
         iyy = max(inertia_min, (1.0 / 12.0) * m * (L * L + T * T))
         izz = max(inertia_min, (1.0 / 12.0) * m * (L * L + W * W))
 
-        # stiffness растет к базе
-        k_j = k_tip * (q**j)
-
-        # демпфирование привязываем к sqrt(k), но множитель маленький, чтобы не формировать движение
-        c_j = damping_mul * math.sqrt(max(1e-12, k_j))
-
-        # frictionloss тоже растет к базе, но с малым базовым уровнем
-        f_j = frictionloss_tip * (q**j)
-
-        a_j = armature_mul * m * (L * L)
-
         link_len[i] = L
         link_w[i] = W
         mass[i] = m
         Ixx[i] = ixx
         Iyy[i] = iyy
         Izz[i] = izz
-        stiffness[i] = k_j
-        damping[i] = c_j
-        frictionloss[i] = f_j
-        armature[i] = a_j
 
         mesh_name = f"hex_{i:02d}"
         meshes_xml.append(
             f'<mesh name="{mesh_name}" file="{unit_obj}" scale="{_fmt(sx)} {_fmt(sy)} {_fmt(sz)}"/>'
         )
 
+        # исключаем контакт ближайших сегментов, но не даем "пролезать" через базу
         if i >= 1:
-            excludes_xml.append(f'<exclude body1="link_{i-1:02d}" body2="link_{i:02d}"/>')
+            excludes_xml.append(
+                f'<exclude body1="link_{i-1:02d}" body2="link_{i:02d}"/>'
+            )
+
 
         tendon_sites_left.append(f"site_left_{i:02d}")
         tendon_sites_right.append(f"site_right_{i:02d}")
 
     # Цепочка hinge вдоль +X, изгиб в плоскости пола (ось z)
-    indent = "    "
+    # arc-length ?? ???? ? ??????? (i=0 ????, i=n-1 ??????)
+    cum_len = [0.0] * n_segments
+    total_len = 0.0
+    for i in range(1, n_segments):
+        total_len += link_len[i - 1]
+        cum_len[i] = total_len
+    total_len = max(1e-9, total_len)
+
     for i in range(n_segments):
+        s = cum_len[i] / total_len  # 0 ? ????, 1 ? ???????
+        t = (1.0 - s) ** 1.25
+
+        k_j = k_tip * (1.0 + (k_base_factor - 1.0) * t)
+
+        # ????????? ???? ?????, ????? ?????????????
+        if i == 0:
+            k_j *= 1.00
+        if i == 1:
+            k_j *= 1.05
+        elif i == 2:
+            k_j *= 1.05
+
+        # ?????? ???? ??????, ????? ???????????? ??????
+        if s > 0.75:
+            k_j *= 1.18
+
+        c_j = damping_mul * math.sqrt(max(1e-12, k_j))
+
+        f_j = frictionloss_tip * (1.0 + (fl_base_factor - 1.0) * t)
+        if i == 0:
+            f_j *= 0.85
+        elif i == 1:
+            f_j *= 0.95
+
+        a_j = armature_mul * mass[i] * (link_len[i] * link_len[i])
+
+        stiffness[i] = k_j
+        damping[i] = c_j
+        frictionloss[i] = f_j
+        armature[i] = a_j
+
+    indent = "    "
+
+    for i in range(n_segments):
+
         name = f"link_{i:02d}"
 
         if i == 0:
@@ -261,7 +315,7 @@ def generate_spiral_tentacle_xml(
             pos = f"{_fmt(link_len[i-1])} 0 0"
             joint_xml = (
                 f'<joint name="hinge_{i:02d}" type="hinge" axis="0 0 1" '
-                f'limited="true" range="-2.6 2.6" '
+                f'limited="true" range="-3.2 3.2" '
                 f'stiffness="{_fmt(stiffness[i])}" '
                 f'damping="{_fmt(damping[i])}" '
                 f'frictionloss="{_fmt(frictionloss[i])}" '
@@ -277,18 +331,46 @@ def generate_spiral_tentacle_xml(
         mesh_name = f"hex_{i:02d}"
 
         # margin умеренный: уменьшили, чтобы не мешать плотной упаковке и форме "?"
-        margin = 0.0012 * scale[i]
+        margin = 0.00018# * (scale[i] ** 0.25)
 
+        # ?????, ????? min-x ????? ? frame ????? ??? ????? 0
+        # x_world = x_obj * sx + geom_x
+        # min(x_world) = unit_xmin*sx + geom_x = 0  -> geom_x = -unit_xmin*sx
+        geom_x = -unit_xmin * (sx_tip * scale[i])
+        geom_pos = f"{_fmt(geom_x)} 0 0"
         geom_xml = (
             f'<geom name="geom_{i:02d}" type="mesh" mesh="{mesh_name}" '
+            f'pos="{geom_pos}" '
             f'friction="{friction}" solimp="{solimp}" solref="{solref}" '
             f'contype="1" conaffinity="1" condim="3" '
             f'margin="{_fmt(margin)}"/>'
         )
 
+        # Базовый стоппер от самопрохождения
+
+
         # Сайты троса в середине звена, симметрично по y
-        y_off = tendon_offset_frac * 0.5 * link_w[i]
-        site_x = 0.5 * link_len[i]
+        s = cum_len[i] / total_len
+        # ???????? ??????? ???????? ????????
+        sz_i = sz_tip * scale[i]
+        # s: 0 ????, 1 ??????
+        y_min = 0.0034 * (1.0 - s) + 0.0019 * s
+        y_cap = 0.0039 * (1.0 - s) + 0.0024 * s
+
+        # ??????????? ????? ?????: ? ???? ??????, ? ??????? ??????
+        frac_eff = 0.80 * (1.0 - s) + 0.52 * s
+        y_raw = frac_eff * 0.5 * link_w[i]
+        y_off = min(y_cap, max(y_min, y_raw))
+
+        # ??????? ??????? ?? ???????, ????? ?? ?? "??????" ??? ????????
+        if s > 0.70:
+            y_off = min(y_off, 0.00215)
+
+        # ???? ????? ? ???? (?????? ??????), ?????? ????? ? ?????? (?????? ??????)
+        site_x_frac = 0.93 * (1.0 - s) + 0.68 * s
+        site_x = site_x_frac * link_len[i]
+
+        # ???????? ??????? ?????? ?? ??????? ??? ??????? self-packing
         left_site = tendon_sites_left[i]
         right_site = tendon_sites_right[i]
         site_size = max(0.0009, 0.0012 * scale[i])
@@ -299,10 +381,33 @@ def generate_spiral_tentacle_xml(
         )
 
         body_lines.append(f'{indent * i}<body name="{name}" pos="{pos}">')
+        if i == 0:
+            stop_name = "base_stop_00"
+            base_stop_geom = (
+                f'<geom name="{stop_name}" type="cylinder" '
+                f'pos="0 0 0" size="{_fmt(0.0045)} {_fmt(base_thickness*0.6)}" '
+                f'rgba="0.4 0.4 0.4 0.4" '
+                f'contype="1" conaffinity="1" '
+                f'solimp="{solimp}" solref="{solref}" '
+                f'friction="1.2 0.02 0.0001"/>'
+            )
+            body_lines.append(f"{indent * (i + 1)}{base_stop_geom}")
         if joint_xml:
             body_lines.append(f"{indent * (i + 1)}{joint_xml}")
         body_lines.append(f"{indent * (i + 1)}{inertial_xml}")
         body_lines.append(f"{indent * (i + 1)}{geom_xml}")
+        # ???????????? ?????????: ?????? ???????, ????? ????? ?? "????????" ? 3D
+        sole = (
+            f'<geom name="sole_{i:02d}" type="box" '
+            f'pos="{_fmt(0.5*link_len[i])} 0 {_fmt(-0.50*sz_i)}" '
+            f'size="{_fmt(0.46*link_len[i])} {_fmt(0.12*link_w[i])} {_fmt(0.08*sz_i)}" '
+            f'rgba="0 0 0 0" contype="1" conaffinity="1" condim="3" '
+            f'friction="0.9 0.01 0.0001" solimp="{solimp}" solref="{solref}" '
+            f'margin="0"/>'
+        )
+        # sole ?? ?????? ?? ?????? 3 ????? - ????? ???? ?????? ? hinge_00..02 ?? ????????
+        if i >= 3:
+            body_lines.append(f"{indent*(i+1)}{sole}")
         body_lines.append(f"{indent * (i + 1)}{sites_xml}")
 
     for i in reversed(range(n_segments)):
@@ -328,7 +433,7 @@ def generate_spiral_tentacle_xml(
 
     xml = f"""<mujoco model="spirob_2tendon_with_cube">
   <compiler angle="radian" coordinate="local" meshdir="."/>
-  <option timestep="{_fmt(timestep)}" gravity="0 0 -9.81" integrator="implicitfast"/>
+  <option timestep="{_fmt(timestep)}" gravity="0 0 -9.81" integrator="implicitfast" iterations="250" ls_iterations="80"/>
   <size njmax="12000" nconmax="12000"/>
 
   <default>
