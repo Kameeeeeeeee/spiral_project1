@@ -1,18 +1,15 @@
 # generate_spiral_xml.py
 #
-# Генератор MJCF для двухтроссовой спиральной щупальцы SpiRob (rigid-link + spatial tendons)
-# плюс кубик-объект для grasp-and-transport.
+# Цель: физически консистентная MuJoCo модель SpiRob без "виртуальных" моментов.
+# Ключевые правки относительно твоей текущей ситуации:
+# 1) Только реальная актуация через tendon motor (force-based). Никаких компенсаций через qfrc_applied.
+# 2) Реалистичный диапазон сил: motor_gear = 100 Н при ctrl=1 (в статье порядок десятков ньютонов).
+# 3) Убираем "вязкость, формирующую движение": damping_mul и frictionloss_tip уменьшены.
+# 4) Контакт устойчивый (timestep=0.001, solref быстрее), кубик с корректной инерцией, чтобы не "пролетал".
+# 5) Кубик спавнится случайно на расстоянии [0.1L, 0.55L] от базы, на той же плоскости, но не на щупальце.
 #
-# Все актуальные изменения:
-# - Кубик: cube_half = 0.02, корректная масса и инерция (I = (1/6) m a^2), жесткий контакт.
-# - Спавн кубика: расстояние r равномерно в [0.1L, 0.55L], случайный угол в секторе впереди базы,
-#   кубик не спавнится на центральной полосе щупальцы.
-# - Контакт: solref сделан быстрее (0.003 1.2), timestep = 0.001, nconmax/njmax увеличены.
-# - Щупальца толще по z (tip_thickness = 0.0024) и приподнята над полом.
-# - Чтобы вернуть сильное сворачивание при более "жестком" контакте:
-#   1) motor_gear увеличен до 2600 (больше максимальное натяжение),
-#   2) margin на сегментах уменьшен до 0.0020*scale (контакт не стартует слишком рано),
-#   3) damping_mul и frictionloss_tip слегка снижены (меньше диссипации).
+# ВАЖНО: форма "?" зависит от сценария управления (force sequence), а не от огромной силы.
+# Это реализовано в debug_viewer через пресеты и плавный ramp сил.
 
 from __future__ import annotations
 
@@ -29,37 +26,35 @@ class SpiralParams:
     # Логарифмическая спираль: r(θ) = a·exp(bθ), b = cot(ψ)
     psi_deg: float = 77.6
 
-    # Геометрия в развернутом (прямом) состоянии
+    # Длина в развернутом состоянии
     total_length: float = 0.45
 
-    # Ширина звена и "высота" (толщина) по z
+    # Геометрия звена
     tip_width: float = 0.0075
-    tip_thickness: float = 0.0024
+    tip_thickness: float = 0.0024  # увеличенная толщина по z для хватания кубика
 
-    # Поднятие над полом (к 0.5*толщины базы)
+    # Подъем над полом
     lift_z: float = 0.010
 
-    # Сайты тросов симметрично относительно центральной оси
-    tendon_offset_frac: float = 0.55
+    # Сайты троса (плечо момента)
+    tendon_offset_frac: float = 0.65  # увеличили плечо, чтобы легче получать "?" при тех же силах
 
-    # База жестче, кончик мягче
-    k_tip: float = 3.0
-    damping_mul: float = 1.2  # было 1.6, снизили для более сильного изгиба
-
-    # Потери для устойчивости (снизили, чтобы не "душить" изгиб)
-    frictionloss_tip: float = 0.012  # было 0.018
+    # Механика: градиент податливости правильный (база жестче), но без "удушающей" вязкости
+    k_tip: float = 1.5
+    damping_mul: float = 0.55        # было больше, из-за этого система становилась "в геле"
+    frictionloss_tip: float = 0.003  # было больше, это убивало квазистатику
     armature_mul: float = 1.2
 
-    # Масса на кончике, дальше растет по q^(3j)
+    # Масса на кончике
     m_tip: float = 2e-6
 
-    # Актуаторы по tendon (увеличили, чтобы вернуть сильное сворачивание)
-    motor_gear: float = 2600.0
+    # Реалистичный привод: ctrl=1 -> 100 Н натяжение
+    motor_gear: float = 120.0
 
-    # Меньший шаг интегрирования снижает "пролет" через контакт
+    # Контакт и устойчивость
     timestep: float = 0.001
 
-    # Кубик (размер задается половиной ребра)
+    # Кубик
     cube_half: float = 0.02
     cube_density: float = 800.0
     cube_friction: str = "1.1 0.02 0.0001"
@@ -74,7 +69,7 @@ def _cot(x: float) -> float:
 
 
 def _ensure_unit_mesh_obj() -> str:
-    # Используем obj, который генерирует generate_hex_mesh.py (требование проекта).
+    # Требование: звено - obj из generate_hex_mesh.py
     from generate_hex_mesh import ensure_unit_hex_mesh_obj  # type: ignore
 
     return ensure_unit_hex_mesh_obj("assets/hex_base.obj")
@@ -87,29 +82,24 @@ def _sample_cube_xy(
     cube_half: float,
     y_clear: float,
 ) -> tuple[float, float]:
-    # Кубик спавнится на расстоянии r от базы: r ∈ [0.1L, 0.55L], равномерно по r.
+    # Кубик: r ∈ [0.1L, 0.55L], впереди базы, не на центральной полосе щупальцы.
     r_min = 0.10 * total_length
     r_max = 0.55 * total_length
 
-    # Сектор впереди базы, чтобы спавн был пригоден для grasp.
+    # Сектор спавна впереди
     ang_min = -0.85 * math.pi / 2.0
     ang_max = +0.85 * math.pi / 2.0
 
-    for _ in range(12000):
+    for _ in range(20000):
         r = rng.uniform(r_min, r_max)
         ang = rng.uniform(ang_min, ang_max)
         x = r * math.cos(ang)
         y = r * math.sin(ang)
 
-        # Щупальца лежит вдоль +X, поэтому берем только x>0.
         if x <= 0.0:
             continue
-
-        # Не спавним на центральной полосе щупальцы.
         if abs(y) < y_clear:
             continue
-
-        # Зазор от базы, чтобы кубик не пересекался со стартовым звеном.
         if x < (cube_half * 2.5):
             continue
 
@@ -138,12 +128,11 @@ def generate_spiral_tentacle_xml(
     cube_half: float = SpiralParams.cube_half,
     cube_density: float = SpiralParams.cube_density,
     cube_friction: str = SpiralParams.cube_friction,
-    # seed для воспроизводимого спавна (полезно для отладки/RL)
     cube_seed: int | None = None,
 ) -> str:
     unit_obj = _ensure_unit_mesh_obj()
 
-    # Δθ дискретизация по углу, q = exp(bΔθ), b = cot(ψ)
+    # q = exp(bΔθ), b = cot(ψ)
     delta = math.radians(delta_deg)
     b = _cot(math.radians(psi_deg))
     q = math.exp(b * delta)
@@ -151,7 +140,7 @@ def generate_spiral_tentacle_xml(
     if n_segments < 2:
         raise ValueError("n_segments must be >= 2")
 
-    # Отношение размеров unit-mesh по XY для корректной ширины.
+    # unit mesh пропорции по XY
     try:
         from generate_hex_mesh import unit_y_span_over_x_span  # type: ignore
 
@@ -167,25 +156,21 @@ def generate_spiral_tentacle_xml(
     except Exception:
         unit_y_over_x = 2.4630541871921187
 
-    # Длины звеньев геом. прогрессией по q, суммарно total_length.
+    # L_tip так, чтобы сумма геом. прогрессии дала total_length
     L_tip = total_length * (q - 1.0) / (q**n_segments - 1.0)
 
-    # Масштабирование меша: x-span=1, y-span=unit_y_over_x, z-span=1.
     sx_tip = L_tip
     sy_tip = tip_width / max(1e-12, unit_y_over_x)
     sz_tip = tip_thickness
 
-    # Толщина базы.
     base_thickness = sz_tip * (q ** (n_segments - 1))
-
-    # Поднятие щупальцы над полом.
     base_z = 0.5 * base_thickness + max(0.0, lift_z)
 
-    # Защита от mjMINVAL.
+    # Safety против mjMINVAL
     mass_min = 2e-6
     inertia_min = 1e-9
 
-    # Контакт делаем быстрым и стабильным.
+    # Контакт: быстрый (меньше проникновения), но без чрезмерного "раннего" упора
     solimp = "0.95 0.95 0.01"
     solref = "0.003 1.2"
     friction = "1.0 0.01 0.0001"
@@ -210,8 +195,8 @@ def generate_spiral_tentacle_xml(
     scale = [0.0] * n_segments
 
     for i in range(n_segments):
-        # j=0 на кончике, j=N-1 у основания.
-        j = (n_segments - 1) - i
+        # i=0 база, i=N-1 кончик
+        j = (n_segments - 1) - i  # j=0 tip, j=N-1 base
         s = q**j
         scale[i] = s
 
@@ -223,20 +208,23 @@ def generate_spiral_tentacle_xml(
         W = sy * unit_y_over_x
         T = sz
 
-        # Масса масштабируется по q^(3j).
+        # mass_i = m0*q^(3j)
         m = max(mass_min, m_tip * (q ** (3.0 * j)))
 
-        # Инерция как у прямоугольного бруса.
+        # инерция как у прямоугольного бруса
         ixx = max(inertia_min, (1.0 / 12.0) * m * (W * W + T * T))
         iyy = max(inertia_min, (1.0 / 12.0) * m * (L * L + T * T))
         izz = max(inertia_min, (1.0 / 12.0) * m * (L * L + W * W))
 
-        # Жесткость растет к базе.
+        # stiffness растет к базе
         k_j = k_tip * (q**j)
+
+        # демпфирование привязываем к sqrt(k), но множитель маленький, чтобы не формировать движение
         c_j = damping_mul * math.sqrt(max(1e-12, k_j))
 
-        # Потери и armature.
+        # frictionloss тоже растет к базе, но с малым базовым уровнем
         f_j = frictionloss_tip * (q**j)
+
         a_j = armature_mul * m * (L * L)
 
         link_len[i] = L
@@ -255,14 +243,13 @@ def generate_spiral_tentacle_xml(
             f'<mesh name="{mesh_name}" file="{unit_obj}" scale="{_fmt(sx)} {_fmt(sy)} {_fmt(sz)}"/>'
         )
 
-        # Исключаем контакт соседей.
         if i >= 1:
             excludes_xml.append(f'<exclude body1="link_{i-1:02d}" body2="link_{i:02d}"/>')
 
         tendon_sites_left.append(f"site_left_{i:02d}")
         tendon_sites_right.append(f"site_right_{i:02d}")
 
-    # Цепочка hinge в плоскости пола (ось z).
+    # Цепочка hinge вдоль +X, изгиб в плоскости пола (ось z)
     indent = "    "
     for i in range(n_segments):
         name = f"link_{i:02d}"
@@ -289,9 +276,8 @@ def generate_spiral_tentacle_xml(
 
         mesh_name = f"hex_{i:02d}"
 
-        # Контакт для мешей: margin нужен, но слишком большой мешает плотной упаковке.
-        # Компромисс: 0.0020*scale (было 0.0030*scale).
-        margin = 0.0020 * scale[i]
+        # margin умеренный: уменьшили, чтобы не мешать плотной упаковке и форме "?"
+        margin = 0.0012 * scale[i]
 
         geom_xml = (
             f'<geom name="geom_{i:02d}" type="mesh" mesh="{mesh_name}" '
@@ -300,7 +286,7 @@ def generate_spiral_tentacle_xml(
             f'margin="{_fmt(margin)}"/>'
         )
 
-        # Сайты тросов в середине звена, симметрично по y.
+        # Сайты троса в середине звена, симметрично по y
         y_off = tendon_offset_frac * 0.5 * link_w[i]
         site_x = 0.5 * link_len[i]
         left_site = tendon_sites_left[i]
@@ -325,19 +311,15 @@ def generate_spiral_tentacle_xml(
     tendon_left_sites = "".join([f'<site site="{s}"/>' for s in tendon_sites_left])
     tendon_right_sites = "".join([f'<site site="{s}"/>' for s in tendon_sites_right])
 
-    # Кубик: масса из плотности и объема.
+    # Кубик: масса и корректная инерция
     cube_side = 2.0 * cube_half
     cube_vol = cube_side * cube_side * cube_side
     cube_mass = max(mass_min, cube_density * cube_vol)
-
-    # Кубик: корректная инерция (ключевой фикс от "пролета").
     cube_I = (1.0 / 6.0) * cube_mass * (cube_side * cube_side)
     cube_I = max(inertia_min, cube_I)
 
-    # Спавн кубика.
     rng = random.Random(cube_seed)
 
-    # Полоса запрета по y, чтобы не спавнить на теле щупальцы.
     base_width = tip_width * (q ** (n_segments - 1))
     y_clear = max(1.8 * cube_half, 1.0 * base_width)
 
@@ -362,7 +344,7 @@ def generate_spiral_tentacle_xml(
     <geom name="floor" type="plane" pos="0 0 0" size="5 5 0.1"
           friction="{friction}" solimp="{solimp}" solref="{solref}" rgba="0.2 0.2 0.2 1"/>
 
-    <!-- Кубик-цель: случайное расстояние r в [0.1L, 0.55L] -->
+    <!-- Кубик-цель -->
     <body name="cube" pos="{_fmt(cx)} {_fmt(cy)} {_fmt(cz)}">
       <freejoint/>
       <inertial mass="{_fmt(cube_mass)}" pos="0 0 0"
@@ -386,11 +368,11 @@ def generate_spiral_tentacle_xml(
     </spatial>
     <spatial name="tendon_right" width="0.002">
       {tendon_right_sites}
-    </spatial>
+    </spatial>  
   </tendon>
 
   <actuator>
-    <!-- tension-only -->
+    <!-- tension-only: отрицательного натяжения не существует -->
     <motor name="motor_left" tendon="tendon_left" ctrlrange="0 1" ctrllimited="true"
            gear="{_fmt(motor_gear)}"/>
     <motor name="motor_right" tendon="tendon_right" ctrlrange="0 1" ctrllimited="true"

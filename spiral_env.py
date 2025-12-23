@@ -1,460 +1,865 @@
-import numpy as np
+# spiral_env.py
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple
+
 import gymnasium as gym
 import mujoco
+import numpy as np
 
 from generate_spiral_xml import generate_spiral_tentacle_xml
 
 
-class SpiralTentacle2TEnv(gym.Env):
-    """
-    Два троса управляют спиральной щупальцей (24 звена) и шаром-целью.
+def _clip(x: float, lo: float, hi: float) -> float:
+    return lo if x < lo else (hi if x > hi else x)
 
-    В ЭТОЙ ВЕРСИИ:
-      - цель стейджа 1: ОБВИТЬ шар и УДЕРЖИВАТЬ его, почти не сдвигая,
-        а не подтягивать к основанию;
-      - вводим симметрию по лево/право: для агента action[0] всегда трос
-        со стороны шара, action[1] - трос с противоположной стороны.
-    """
 
+def _safe_norm(v: np.ndarray, eps: float = 1e-9) -> float:
+    return float(np.sqrt(float(np.dot(v, v)) + eps))
+
+
+@dataclass
+class DomainRandRanges:
+    friction_link_floor_mu: Tuple[float, float] = (0.8, 1.6)
+    friction_link_floor_tors: Tuple[float, float] = (0.002, 0.02)
+    friction_link_floor_roll: Tuple[float, float] = (1e-6, 2e-4)
+
+    friction_link_cube_mu: Tuple[float, float] = (0.9, 2.2)
+    friction_link_cube_tors: Tuple[float, float] = (0.002, 0.03)
+    friction_link_cube_roll: Tuple[float, float] = (1e-6, 3e-4)
+
+    friction_link_link_mu: Tuple[float, float] = (0.6, 1.6)
+    friction_link_link_tors: Tuple[float, float] = (0.001, 0.02)
+    friction_link_link_roll: Tuple[float, float] = (1e-6, 2e-4)
+
+    solref_link_link_timeconst: Tuple[float, float] = (0.006, 0.02)
+    solref_link_link_dampratio: Tuple[float, float] = (0.7, 1.6)
+
+    solref_link_cube_timeconst: Tuple[float, float] = (0.004, 0.015)
+    solref_link_cube_dampratio: Tuple[float, float] = (0.7, 1.6)
+
+    solimp_link_link_dmin: Tuple[float, float] = (0.8, 0.98)
+    solimp_link_link_dmax: Tuple[float, float] = (0.95, 1.0)
+    solimp_link_link_width: Tuple[float, float] = (0.001, 0.01)
+    solimp_link_link_midpoint: Tuple[float, float] = (0.1, 0.5)
+    solimp_link_link_power: Tuple[float, float] = (2.0, 4.0)
+
+    solimp_link_cube_dmin: Tuple[float, float] = (0.85, 0.99)
+    solimp_link_cube_dmax: Tuple[float, float] = (0.95, 1.0)
+    solimp_link_cube_width: Tuple[float, float] = (0.001, 0.01)
+    solimp_link_cube_midpoint: Tuple[float, float] = (0.1, 0.5)
+    solimp_link_cube_power: Tuple[float, float] = (2.0, 4.0)
+
+    cube_mass_scale: Tuple[float, float] = (0.8, 1.25)
+
+    hinge_damping_scale: Tuple[float, float] = (0.8, 1.5)
+    hinge_armature_scale: Tuple[float, float] = (0.8, 1.6)
+
+    # FIX (4): narrow early-training DR envelopes for v_max and t_max
+    v_max: Tuple[float, float] = (0.20, 0.35)
+    t_max: Tuple[float, float] = (800.0, 1200.0)
+
+    u_tau: Tuple[float, float] = (0.06, 0.16)
+    du_max: Tuple[float, float] = (0.05, 0.18)
+    enc_noise_std: Tuple[float, float] = (0.0, 0.0015)
+
+
+class SpiralPickPlaceEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 60}
 
     def __init__(
         self,
-        render_mode=None,
-        num_links: int = 24,
+        *,
+        render_mode: Optional[str] = None,
+        n_segments: int = 24,
+        delta_deg: float = 30.0,
+        psi_deg: float = 77.6,
         total_length: float = 0.45,
-        base_radius: float = 0.02,
-        tip_radius: float = 0.006,
-        max_episode_steps: int = 400,
+        tip_width: float = 0.0075,
+        tip_thickness: float = 0.0024,
+        lift_z: float = 0.010,
+        tendon_offset_frac: float = 0.55,
+        k_tip: float = 3.0,
+        damping_mul: float = 1.2,
+        frictionloss_tip: float = 0.012,
+        armature_mul: float = 1.2,
+        m_tip: float = 2e-6,
+        motor_gear: float = 2600.0,
+        timestep: float = 0.001,
+        cube_half: float = 0.02,
+        cube_density: float = 800.0,
+        cube_friction: str = "1.1 0.02 0.0001",
+        max_episode_steps: int = 900,
+        substeps: int = 10,
+        arena_half: float = 0.45,
+        cube_spawn_xy_jitter: float = 0.06,
+        goal_a_xy: Tuple[float, float] = (0.18, 0.12),
+        goal_b_xy: Tuple[float, float] = (0.18, -0.12),
+        goal_z: float = 0.02,
+        goal_radius: float = 0.05,
+        success_hold_steps: int = 30,
+        grasp_min_contacts: int = 2,
+        grasp_v_cube_max: float = 0.25,
+        grasp_rel_v_tip_max: float = 0.25,
+        grasp_max_z: float = 0.10,
+        l_max: float = 0.18,
+        ell_rest_bias: float = 0.0,
+        kp: float = 200000.0,
+        kd: float = 6000.0,
+        dr_ranges: Optional[DomainRandRanges] = None,
+        dr_enable: bool = True,
+        w_reach: float = 1.6,
+        w_grasp: float = 1.4,
+        w_transport: float = 0.0,
+        w_place: float = 0.0,
+        ctrl_energy_cost: float = 0.0015,
+        action_smooth_cost: float = 0.01,
+        grasp_v_scale: float = 0.40,
+        grasp_t_scale: float = 0.55,
+        grasp_filter_tau: float = 0.12,
+        vspool_penalty_coef: float = 0.05,
+        tension_penalty_coef: float = 0.10,
+        v_fly_threshold: float = 1.0,
+        z_fly_threshold: float = 0.18,
+        fly_penalty: float = 8.0,
+        seed: Optional[int] = None,
+        r_contact: float = 0.09,
+        alpha_success: float = 0.50,
+        v_soft: float = 0.22,
+        w_d_reach: float = 1.0,
+        # FIX (1): keep directional tip-velocity incentive effectively off in phase 0
+        w_v_reach: float = 0.0,
+        w_prog_reach: float = 0.05,
+        prog_clip: float = 0.01,
+        w_cb: float = 1.2,
+        w_c: float = 0.10,
+        w_vc: float = 0.45,
+        w_T: float = 0.25,
+        w_L: float = 0.12,
     ):
         super().__init__()
+        self.render_mode = render_mode
 
-        self.num_links = num_links
-        self.total_length = total_length
-        self.base_radius = base_radius
-        self.tip_radius = tip_radius
-        self.max_episode_steps = max_episode_steps
+        self.n_segments = int(n_segments)
+        self.max_episode_steps = int(max_episode_steps)
+        self.substeps = int(substeps)
+        self.arena_half = float(arena_half)
+        self.cube_spawn_xy_jitter = float(cube_spawn_xy_jitter)
+
+        self.goal_a = np.array([goal_a_xy[0], goal_a_xy[1], goal_z], dtype=np.float64)
+        self.goal_b = np.array([goal_b_xy[0], goal_b_xy[1], goal_z], dtype=np.float64)
+        self.goal_radius = float(goal_radius)
+        self.success_hold_steps = int(success_hold_steps)
+
+        self.grasp_min_contacts = int(grasp_min_contacts)
+        self.grasp_v_cube_max = float(grasp_v_cube_max)
+        self.grasp_rel_v_tip_max = float(grasp_rel_v_tip_max)
+        self.grasp_max_z = float(grasp_max_z)
+
+        self.l_max = float(l_max)
+        self.ell_rest_bias = float(ell_rest_bias)
+        self.kp = float(kp)
+        self.kd = float(kd)
+
+        self.dr_ranges = dr_ranges if dr_ranges is not None else DomainRandRanges()
+        self.dr_enable = bool(dr_enable)
+
+        self.w_reach = float(w_reach)
+        self.w_grasp = float(w_grasp)
+        self.w_transport = float(w_transport)
+        self.w_place = float(w_place)
+        self.ctrl_energy_cost = float(ctrl_energy_cost)
+        self.action_smooth_cost = float(action_smooth_cost)
+
+        self.grasp_v_scale = float(grasp_v_scale)
+        self.grasp_t_scale = float(grasp_t_scale)
+        self.grasp_filter_tau = float(grasp_filter_tau)
+
+        self.vspool_penalty_coef = float(vspool_penalty_coef)
+        self.tension_penalty_coef = float(tension_penalty_coef)
+
+        self.v_fly_threshold = float(v_fly_threshold)
+        self.z_fly_threshold = float(z_fly_threshold)
+        self.fly_penalty = float(fly_penalty)
+
+        self.r_contact = float(r_contact)
+        self.alpha_success = float(alpha_success)
+        self.v_soft = float(v_soft)
+
+        self.w_d_reach = float(w_d_reach)
+        self.w_v_reach = float(w_v_reach)
+        self.w_prog_reach = float(w_prog_reach)
+        self.prog_clip = float(prog_clip)
+
+        self.w_cb = float(w_cb)
+        self.w_c = float(w_c)
+        self.w_vc = float(w_vc)
+        self.w_T = float(w_T)
+        self.w_L = float(w_L)
+
+        # FIX (3): phase-0 impulse penalties as scaled versions of phase-1 penalties
+        self._phase0_impulse_penalty_scale = 0.30
+
+        if seed is not None:
+            self.np_random, _ = gym.utils.seeding.np_random(seed)
+        else:
+            self.np_random, _ = gym.utils.seeding.np_random(None)
 
         xml = generate_spiral_tentacle_xml(
-            num_links=num_links,
-            base_radius=base_radius,
-            tip_radius=tip_radius,
-            total_length=total_length,
+            n_segments=self.n_segments,
+            delta_deg=float(delta_deg),
+            psi_deg=float(psi_deg),
+            total_length=float(total_length),
+            tip_width=float(tip_width),
+            tip_thickness=float(tip_thickness),
+            lift_z=float(lift_z),
+            tendon_offset_frac=float(tendon_offset_frac),
+            k_tip=float(k_tip),
+            damping_mul=float(damping_mul),
+            frictionloss_tip=float(frictionloss_tip),
+            armature_mul=float(armature_mul),
+            m_tip=float(m_tip),
+            motor_gear=float(motor_gear),
+            timestep=float(timestep),
+            cube_half=float(cube_half),
+            cube_density=float(cube_density),
+            cube_friction=str(cube_friction),
+            cube_seed=None,
         )
         self.model = mujoco.MjModel.from_xml_string(xml)
         self.data = mujoco.MjData(self.model)
 
-        # два троса
-        self.act_n = self.model.nu
-        assert self.act_n == 2, f"expected 2 actuators, got {self.act_n}"
+        if self.model.nu != 2:
+            raise RuntimeError(f"Expected nu=2, got nu={self.model.nu}")
 
-        self.qpos_n = self.model.nq
-        self.qvel_n = self.model.nv
+        self.act_id_left = int(self.model.actuator("motor_left").id)
+        self.act_id_right = int(self.model.actuator("motor_right").id)
 
-        # мягкие моторы, чтобы не разгоняться
-        self.ctrl_scale = 0.6
+        self.ten_id_left = int(self.model.tendon("tendon_left").id)
+        self.ten_id_right = int(self.model.tendon("tendon_right").id)
 
-        self.action_space = gym.spaces.Box(
-            low=-1.0,
-            high=1.0,
-            shape=(self.act_n,),
-            dtype=np.float32,
-        )
+        self.body_id_base = int(self.model.body("link_00").id)
+        self.body_id_tip = int(self.model.body(f"link_{self.n_segments - 1:02d}").id)
 
-        # наблюдение: qpos, qvel, tip, ball, rel_tip_ball, rel_ball_base
-        obs_dim = self.qpos_n + self.qvel_n + 3 + 3 + 3 + 3
-        self.observation_space = gym.spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(obs_dim,),
-            dtype=np.float32,
-        )
+        self.body_id_cube = int(self.model.body("cube").id)
+        self.geom_id_floor = int(self.model.geom("floor").id)
+        self.geom_id_cube = int(self.model.geom("cube_geom").id)
 
-        self.tip_body_id = self.model.body(f"link_{self.num_links - 1}").id
-        self.base_body_id = self.model.body("base").id
-        self.ball_body_id = self.model.body("obj_sphere_hi").id
-        self.ball_geom_id = self.model.geom("obj_sphere_hi_geom").id
-        self.floor_geom_id = self.model.geom("floor").id
-        self.ball_radius = float(self.model.geom_size[self.ball_geom_id][0])
+        self.geom_ids_links = [int(self.model.geom(f"geom_{i:02d}").id) for i in range(self.n_segments)]
 
-        self.link_body_ids = [
-            self.model.body(f"link_{i}").id for i in range(self.num_links)
-        ]
+        cube_jadr = int(self.model.body_jntadr[self.body_id_cube])
+        cube_jnum = int(self.model.body_jntnum[self.body_id_cube])
+        if cube_jnum < 1:
+            raise RuntimeError("Cube body has no joints, expected a freejoint.")
+        cube_jid = cube_jadr
+        if int(self.model.jnt_type[cube_jid]) != int(mujoco.mjtJoint.mjJNT_FREE):
+            raise RuntimeError("Cube first joint is not a free joint, expected <freejoint/>.")
+        self.cube_qpos_adr = int(self.model.jnt_qposadr[cube_jid])
+        self.cube_dof_adr = int(self.model.jnt_dofadr[cube_jid])
 
-        # индексы hinge суставов - для зеркалирования
-        self.hinge_qpos_idx = []
-        self.hinge_qvel_idx = []
-        for j in range(self.model.njnt):
-            if self.model.jnt_type[j] == mujoco.mjtJoint.mjJNT_HINGE:
-                qadr = int(self.model.jnt_qposadr[j])
-                dadr = int(self.model.jnt_dofadr[j])
-                self.hinge_qpos_idx.append(qadr)
-                self.hinge_qvel_idx.append(dadr)
+        self.hinge_dof_ids = []
+        for j in range(int(self.model.njnt)):
+            if int(self.model.jnt_type[j]) == int(mujoco.mjtJoint.mjJNT_HINGE):
+                dof = int(self.model.jnt_dofadr[j])
+                if 0 <= dof < int(self.model.nv):
+                    self.hinge_dof_ids.append(dof)
 
-        # свободный joint мяча
-        ball_joint_id = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_JOINT, "obj_sphere_hi_free"
-        )
-        self.ball_qpos_adr = int(self.model.jnt_qposadr[ball_joint_id])
-        self.ball_dof_adr = int(self.model.jnt_dofadr[ball_joint_id])
+        self._gear = np.zeros(2, dtype=np.float64)
+        self._ctrl_lo = np.zeros(2, dtype=np.float64)
+        self._ctrl_hi = np.ones(2, dtype=np.float64)
 
-        self.render_mode = render_mode
-        self.viewer = None
+        for k, act_id in enumerate([self.act_id_left, self.act_id_right]):
+            g = float(self.model.actuator_gear[act_id, 0])
+            if not np.isfinite(g) or abs(g) < 1e-9:
+                g = 1.0
+            self._gear[k] = g
 
-        self.substeps = 10
+            lo = float(self.model.actuator_ctrlrange[act_id, 0])
+            hi = float(self.model.actuator_ctrlrange[act_id, 1])
+            if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+                lo, hi = 0.0, 1.0
+            self._ctrl_lo[k] = lo
+            self._ctrl_hi[k] = hi
 
-        self.step_counter = 0
-        self.hold_steps = 0
-        self.required_hold_steps = 20
+        self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
-        self.grasp_dist_threshold = 0.07
-        self.grasp_speed_threshold = 0.02
+        self.nq = int(self.model.nq)
+        self.nv = int(self.model.nv)
 
-        self.prev_dist_tip_ball = None
-        self.prev_dist_ball_base = None
-        self.prev_action = np.zeros(self.act_n, dtype=np.float32)
+        obs_dim = self.nq + self.nv + 9 + 9 + 3 + 6 + 4 + 3
+        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
 
-        # стартовая позиция и стартовая дистанция до базы
-        self.ball_init_pos = None
-        self.ball_init_base_dist = None
+        self._viewer = None
 
-        # знак симметрии: +1 - штатно, -1 - зеркалим по оси Y
-        self.sym_sign = 1.0
+        self._step = 0
+        self._phase = 0
 
-    # ---------- helpers ----------
+        self._L = np.zeros(2, dtype=np.float64)
+        self._v = np.zeros(2, dtype=np.float64)
+        self._u_prev = np.zeros(2, dtype=np.float64)
+        self._u_filt = np.zeros(2, dtype=np.float64)
 
-    def _tip_pos(self):
-        return self.data.xpos[self.tip_body_id].copy()
+        self._v_max = 0.35
+        self._t_max = 1100.0
+        self._u_tau = 0.10
+        self._du_max = 0.12
+        self._enc_noise = 0.0
 
-    def _ball_pos(self):
-        return self.data.xpos[self.ball_body_id].copy()
+        self._v_max_base = self._v_max
+        self._t_max_base = self._t_max
 
-    def _base_pos(self):
-        return self.data.xpos[self.base_body_id].copy()
+        self._grasp_v_scale_state = 1.0
+        self._grasp_t_scale_state = 1.0
 
-    def _ball_linvel(self):
-        return self.data.cvel[self.ball_body_id, 3:].copy()
+        self._ell_prev = np.zeros(2, dtype=np.float64)
+        self._ell_rest = np.zeros(2, dtype=np.float64)
 
-    def _ball_contact_stats(self):
-        in_contact = False
-        geoms = set()
-        for i in range(self.data.ncon):
+        self._e_prev = np.zeros(2, dtype=np.float64)
+
+        self._T_last = np.zeros(2, dtype=np.float64)
+
+        self._prev_tip_to_cube = None
+        self._last_action_u = np.zeros(2, dtype=np.float64)
+
+        self._cube_half = float(self.model.geom_size[self.geom_id_cube, 0])
+        if not np.isfinite(self._cube_half) or self._cube_half <= 0.0:
+            self._cube_half = float(cube_half)
+
+        self._dt = float(self.model.opt.timestep) * float(self.substeps)
+        if not np.isfinite(self._dt) or self._dt <= 0.0:
+            self._dt = 0.001 * float(self.substeps)
+
+        self._mj_min = float(getattr(mujoco, "mjMINVAL", 1e-9))
+
+        self._initial_cube_to_base = 0.0
+        self._L_prev_for_reward = np.zeros(2, dtype=np.float64)
+
+    def _pos_base(self) -> np.ndarray:
+        return self.data.xpos[self.body_id_base].copy()
+
+    def _pos_tip(self) -> np.ndarray:
+        return self.data.xpos[self.body_id_tip].copy()
+
+    def _pos_cube(self) -> np.ndarray:
+        return self.data.xpos[self.body_id_cube].copy()
+
+    def _vel_cube_lin(self) -> np.ndarray:
+        return self.data.cvel[self.body_id_cube, 3:].copy()
+
+    def _vel_tip_lin(self) -> np.ndarray:
+        return self.data.cvel[self.body_id_tip, 3:].copy()
+
+    def _contact_stats(self) -> Dict[str, Any]:
+        link_touch = set()
+        cube_floor = False
+
+        ncon = int(self.data.ncon)
+        for i in range(ncon):
             c = self.data.contact[i]
-            hit_ball1 = c.geom1 == self.ball_geom_id
-            hit_ball2 = c.geom2 == self.ball_geom_id
-            if not (hit_ball1 or hit_ball2):
+            g1 = int(c.geom1)
+            g2 = int(c.geom2)
+
+            cube_involved = (g1 == self.geom_id_cube) or (g2 == self.geom_id_cube)
+            if not cube_involved:
                 continue
-            other = c.geom2 if hit_ball1 else c.geom1
-            if other == self.floor_geom_id:
+
+            other = g2 if g1 == self.geom_id_cube else g1
+            if other == self.geom_id_floor:
+                cube_floor = True
                 continue
-            in_contact = True
-            geoms.add(int(other))
-        return in_contact, len(geoms)
 
-    def _symmetrize_q(self, qpos, qvel):
-        if self.sym_sign > 0:
-            return qpos, qvel
-        qpos_sym = qpos.copy()
-        qvel_sym = qvel.copy()
-        for idx in self.hinge_qpos_idx:
-            qpos_sym[idx] *= -1.0
-        for idx in self.hinge_qvel_idx:
-            qvel_sym[idx] *= -1.0
-        return qpos_sym, qvel_sym
+            if other in self.geom_ids_links:
+                link_touch.add(other)
 
-    def _symmetrize_vec3(self, v):
-        if self.sym_sign > 0:
-            return v
-        v_sym = v.copy()
-        v_sym[1] *= -1.0
-        return v_sym
+        return {"num_link_contacts": int(len(link_touch)), "cube_on_floor": bool(cube_floor)}
 
-    def _get_obs(self):
-        qpos = self.data.qpos.ravel()
-        qvel = self.data.qvel.ravel()
-        qpos_sym, qvel_sym = self._symmetrize_q(qpos, qvel)
+    def _is_grasp(self, stats: Dict[str, Any]) -> Tuple[bool, Dict[str, float]]:
+        cube_pos = self._pos_cube()
+        cube_v = self._vel_cube_lin()
+        tip_v = self._vel_tip_lin()
+        rel_v = cube_v - tip_v
 
-        tip = self._symmetrize_vec3(self._tip_pos())
-        ball = self._symmetrize_vec3(self._ball_pos())
-        base = self._symmetrize_vec3(self._base_pos())
+        cube_speed = float(np.linalg.norm(cube_v))
+        rel_speed = float(np.linalg.norm(rel_v))
+        z_ok = float(cube_pos[2]) <= float(self.grasp_max_z)
 
-        rel_tip_ball = ball - tip
-        rel_ball_base = ball - base
+        good_contacts = int(stats["num_link_contacts"]) >= int(self.grasp_min_contacts)
+        speed_ok = (cube_speed <= float(self.v_soft)) and (rel_speed <= float(self.grasp_rel_v_tip_max))
 
-        return np.concatenate(
-            [qpos_sym, qvel_sym, tip, ball, rel_tip_ball, rel_ball_base]
-        ).astype(np.float32)
+        grasp = bool(good_contacts and speed_ok and z_ok)
+        return grasp, {"cube_speed": cube_speed, "rel_speed": rel_speed, "z": float(cube_pos[2])}
 
-    # ---------- reward: обвить и не тянуть к базе ----------
-
-    def _compute_reward(self, action):
-        tip = self._tip_pos()
-        ball = self._ball_pos()
-        base = self._base_pos()
-        ball_vel = self._ball_linvel()
-
-        dist_tip_ball = float(np.linalg.norm(tip - ball))
-        dist_ball_base = float(np.linalg.norm(ball - base))
-
-        if self.prev_dist_tip_ball is None:
-            self.prev_dist_tip_ball = dist_tip_ball
-        if self.prev_dist_ball_base is None:
-            self.prev_dist_ball_base = dist_ball_base
-
-        delta_tip = self.prev_dist_tip_ball - dist_tip_ball
-        delta_base = self.prev_dist_ball_base - dist_ball_base  # >0 если тянем к базе
-
-        # смещение от стартовой позиции
-        if self.ball_init_pos is None:
-            disp = 0.0
-        else:
-            disp = float(np.linalg.norm(ball - self.ball_init_pos))
-
-        in_contact, num_contacts = self._ball_contact_stats()
-        speed = float(np.linalg.norm(ball_vel))
-        speed_sq = speed * speed
-
-        # оценка "обвития"
-        base_to_ball = ball - base
-        tip_to_ball = ball - tip
-        base_to_ball_norm = np.linalg.norm(base_to_ball) + 1e-8
-        tip_to_ball_norm = np.linalg.norm(tip_to_ball) + 1e-8
-        wrap_cos = float(
-            np.dot(base_to_ball, tip_to_ball)
-            / (base_to_ball_norm * tip_to_ball_norm)
+    def _tendon_lengths(self) -> np.ndarray:
+        ell = np.array(
+            [float(self.data.ten_length[self.ten_id_left]), float(self.data.ten_length[self.ten_id_right])],
+            dtype=np.float64,
         )
-        wrap_term = max(0.0, -wrap_cos)  # 0..1, >0 когда шар между базой и кончиком
+        if not np.all(np.isfinite(ell)):
+            ell[:] = 0.0
+        return ell
 
-        reward = 0.0
+    def _update_grasp_limits(self, contact_hint: bool) -> Tuple[float, float]:
+        target_v = self.grasp_v_scale if contact_hint else 1.0
+        target_t = self.grasp_t_scale if contact_hint else 1.0
+        tau = max(1e-6, self.grasp_filter_tau)
+        alpha = _clip(self._dt / tau, 0.0, 1.0)
+        self._grasp_v_scale_state += alpha * (target_v - self._grasp_v_scale_state)
+        self._grasp_t_scale_state += alpha * (target_t - self._grasp_t_scale_state)
+        v_eff = self._v_max_base * float(self._grasp_v_scale_state)
+        t_eff = self._t_max_base * float(self._grasp_t_scale_state)
+        return v_eff, t_eff
 
-        # 1) подползти к шару
-        reward += 4.0 * delta_tip
-        reward -= 0.06 * dist_tip_ball
+    def _update_spools_and_ctrl(self, u_cmd: np.ndarray, contact_hint: bool) -> None:
+        u = np.clip(u_cmd.astype(np.float64), -1.0, 1.0)
 
-        # небольшой штраф за скорость всегда
-        reward -= 0.4 * speed_sq
-
-        if in_contact:
-            # сам факт контакта
-            reward += 2.0
-
-            # больше звеньев в контакте - лучше (обвитие)
-            if num_contacts > 1:
-                reward += 0.8 * (num_contacts - 1)
-
-            # поощряем "обвитость"
-            reward += 2.0 * wrap_term
-
-            # поощряем, что кончик рядом с шаром, но без фанатизма
-            reward += 1.2 * max(0.0, 0.08 - dist_tip_ball)
-
-            # сильный штраф за смещение и скорость мяча
-            reward -= 6.0 * disp
-            reward -= 8.0 * speed_sq
-
-            # дополнительный штраф именно за подтягивание к базе
-            if delta_base > 0.0:
-                reward -= 6.0 * delta_base
-            if self.ball_init_base_dist is not None:
-                pull_frac = max(
-                    0.0,
-                    (self.ball_init_base_dist - dist_ball_base)
-                    / max(self.ball_init_base_dist, 1e-6),
-                )
-                reward -= 4.0 * pull_frac
+        if self._u_tau > 1e-6:
+            alpha = _clip(self._dt / self._u_tau, 0.0, 1.0)
         else:
-            # пока контакта нет - мягкий штраф за скорость
-            reward -= 0.1 * speed_sq
+            alpha = 1.0
+        u_f = self._u_filt + alpha * (u - self._u_filt)
 
-        # успех: обвили, кончик рядом, несколько звеньев, шар почти не двигается
-        close_tip = dist_tip_ball < self.grasp_dist_threshold
-        slow_ball = speed < self.grasp_speed_threshold
-        small_disp = disp < 0.02
-        good_wrap = wrap_term > 0.5 and num_contacts >= 2
+        du = np.clip(u_f - self._u_prev, -self._du_max, self._du_max)
+        u_rl = np.clip(self._u_prev + du, -1.0, 1.0)
 
-        if in_contact and close_tip and slow_ball and small_disp and good_wrap:
-            self.hold_steps += 1
-        else:
-            self.hold_steps = 0
+        self._u_filt[:] = u_rl
+        self._u_prev[:] = u_rl
 
-        success = self.hold_steps >= self.required_hold_steps
-        if success:
-            reward += 20.0
+        v_eff, t_eff = self._update_grasp_limits(contact_hint)
+        v_des = v_eff * u_rl
+        self._v[:] = v_des
+        self._L[:] = np.clip(self._L + self._dt * self._v, 0.0, self.l_max)
 
-        # штраф за выброс мяча вверх
-        if ball[2] > self.ball_radius * 2.0:
-            reward -= 2.0 * (ball[2] - self.ball_radius * 2.0)
+        ell = self._tendon_lengths()
+        ell_meas = ell.copy()
+        if self._enc_noise > 0.0:
+            ell_meas += self.np_random.normal(0.0, self._enc_noise, size=(2,)).astype(np.float64)
 
-        # если не движемся к шару и нет контакта - ленивое состояние
-        if abs(delta_tip) < 1e-4 and not in_contact:
-            reward -= 0.5
+        ell_des = (self._ell_rest - self._L) + self.ell_rest_bias
 
-        # энергосбережение и сглаживание действия
-        reward -= 0.001 * float(np.sum(np.square(action)))
-        delta_a = action - self.prev_action
-        reward -= 0.003 * float(np.sum(np.square(delta_a)))
-        self.prev_action = action.copy()
+        e = ell_meas - ell_des
+        de = (e - self._e_prev) / max(self._dt, 1e-9)
+        self._e_prev[:] = e
 
-        self.prev_dist_tip_ball = dist_tip_ball
-        self.prev_dist_ball_base = dist_ball_base
+        T = self.kp * e + self.kd * de
+        T = np.clip(T, 0.0, t_eff)
+        self._T_last[:] = T
 
-        return (
-            reward,
-            success,
-            dist_tip_ball,
-            disp,
-            speed,
-            wrap_term,
-            in_contact,
+        ctrl = np.zeros(2, dtype=np.float64)
+        for k in range(2):
+            g = self._gear[k]
+            raw = T[k] / g
+            ctrl[k] = _clip(float(raw), float(self._ctrl_lo[k]), float(self._ctrl_hi[k]))
+
+        self.data.ctrl[self.act_id_left] = float(ctrl[0])
+        self.data.ctrl[self.act_id_right] = float(ctrl[1])
+
+        self._ell_prev[:] = ell_meas
+
+    def _rand_uniform(self, lo: float, hi: float) -> float:
+        return float(self.np_random.uniform(lo, hi))
+
+    def _apply_domain_randomization(self) -> None:
+        rr = self.dr_ranges
+
+        mu_lf = self._rand_uniform(*rr.friction_link_floor_mu)
+        t_lf = self._rand_uniform(*rr.friction_link_floor_tors)
+        r_lf = self._rand_uniform(*rr.friction_link_floor_roll)
+
+        mu_lc = self._rand_uniform(*rr.friction_link_cube_mu)
+        t_lc = self._rand_uniform(*rr.friction_link_cube_tors)
+        r_lc = self._rand_uniform(*rr.friction_link_cube_roll)
+
+        mu_ll = self._rand_uniform(*rr.friction_link_link_mu)
+        t_ll = self._rand_uniform(*rr.friction_link_link_tors)
+        r_ll = self._rand_uniform(*rr.friction_link_link_roll)
+
+        for gid in self.geom_ids_links:
+            self.model.geom_friction[gid, 0] = mu_ll
+            self.model.geom_friction[gid, 1] = t_ll
+            self.model.geom_friction[gid, 2] = r_ll
+
+        self.model.geom_friction[self.geom_id_floor, 0] = mu_lf
+        self.model.geom_friction[self.geom_id_floor, 1] = t_lf
+        self.model.geom_friction[self.geom_id_floor, 2] = r_lf
+
+        self.model.geom_friction[self.geom_id_cube, 0] = mu_lc
+        self.model.geom_friction[self.geom_id_cube, 1] = t_lc
+        self.model.geom_friction[self.geom_id_cube, 2] = r_lc
+
+        ll_time = self._rand_uniform(*rr.solref_link_link_timeconst)
+        ll_damp = self._rand_uniform(*rr.solref_link_link_dampratio)
+        lc_time = self._rand_uniform(*rr.solref_link_cube_timeconst)
+        lc_damp = self._rand_uniform(*rr.solref_link_cube_dampratio)
+
+        ll_solimp = np.array(
+            [
+                self._rand_uniform(*rr.solimp_link_link_dmin),
+                self._rand_uniform(*rr.solimp_link_link_dmax),
+                self._rand_uniform(*rr.solimp_link_link_width),
+                self._rand_uniform(*rr.solimp_link_link_midpoint),
+                self._rand_uniform(*rr.solimp_link_link_power),
+            ],
+            dtype=np.float64,
+        )
+        lc_solimp = np.array(
+            [
+                self._rand_uniform(*rr.solimp_link_cube_dmin),
+                self._rand_uniform(*rr.solimp_link_cube_dmax),
+                self._rand_uniform(*rr.solimp_link_cube_width),
+                self._rand_uniform(*rr.solimp_link_cube_midpoint),
+                self._rand_uniform(*rr.solimp_link_cube_power),
+            ],
+            dtype=np.float64,
         )
 
-    # ---------- Gym API ----------
+        for gid in self.geom_ids_links:
+            self.model.geom_solref[gid, 0] = ll_time
+            self.model.geom_solref[gid, 1] = ll_damp
+            self.model.geom_solimp[gid, :] = ll_solimp
 
-    def reset(self, seed=None, options=None):
+        self.model.geom_solref[self.geom_id_cube, 0] = lc_time
+        self.model.geom_solref[self.geom_id_cube, 1] = lc_damp
+        self.model.geom_solimp[self.geom_id_cube, :] = lc_solimp
+
+        bid = self.body_id_cube
+        base_mass = float(self.model.body_mass[bid])
+        if not np.isfinite(base_mass) or base_mass <= self._mj_min:
+            base_mass = 0.02
+
+        s = self._rand_uniform(*rr.cube_mass_scale)
+        new_mass = max(self._mj_min, base_mass * s)
+        self.model.body_mass[bid] = new_mass
+
+        I = self.model.body_inertia[bid].copy()
+        I = np.maximum(I, self._mj_min)
+        self.model.body_inertia[bid, :] = np.maximum(self._mj_min, I * s)
+
+        damp_scale = self._rand_uniform(*rr.hinge_damping_scale)
+        arm_scale = self._rand_uniform(*rr.hinge_armature_scale)
+        for dof in self.hinge_dof_ids:
+            self.model.dof_damping[dof] = max(self._mj_min, float(self.model.dof_damping[dof]) * damp_scale)
+            self.model.dof_armature[dof] = max(self._mj_min, float(self.model.dof_armature[dof]) * arm_scale)
+
+        self._v_max = self._rand_uniform(*rr.v_max)
+        self._t_max = self._rand_uniform(*rr.t_max)
+        self._u_tau = self._rand_uniform(*rr.u_tau)
+        self._du_max = self._rand_uniform(*rr.du_max)
+        self._enc_noise = self._rand_uniform(*rr.enc_noise_std)
+
+        self._v_max_base = self._v_max
+        self._t_max_base = self._t_max
+
+    def _phase_update(self, stats: Dict[str, Any], dist_tip_cube: float) -> None:
+        if self._phase == 0:
+            if int(stats["num_link_contacts"]) >= self.grasp_min_contacts and dist_tip_cube < self.r_contact:
+                self._phase = 1
+        else:
+            if int(stats["num_link_contacts"]) == 0 and dist_tip_cube > (self.r_contact * 1.6):
+                self._phase = 0
+
+    def _compute_reward(
+        self,
+        action_u: np.ndarray,
+        ctrl_energy: float,
+        stats: Dict[str, Any],
+        grasp: bool,
+        grasp_metrics: Dict[str, float],
+    ) -> Tuple[float, Dict[str, Any]]:
+        base = self._pos_base()
+        tip = self._pos_tip()
+        cube = self._pos_cube()
+        v_cube = self._vel_cube_lin()
+        v_tip = self._vel_tip_lin()
+
+        rel_cube_tip = cube - tip
+        dist_tip_cube = _safe_norm(rel_cube_tip)
+        dir_to_cube = rel_cube_tip / max(dist_tip_cube, 1e-9)
+
+        dist_cube_base = _safe_norm(cube - base)
+        cube_speed = float(np.linalg.norm(v_cube))
+        cube_z = float(cube[2])
+
+        if self._prev_tip_to_cube is None:
+            self._prev_tip_to_cube = dist_tip_cube
+
+        reach_progress = float(self._prev_tip_to_cube - dist_tip_cube)
+        reach_progress = _clip(reach_progress, -self.prog_clip, self.prog_clip)
+
+        self._phase_update(stats, dist_tip_cube)
+
+        phase_onehot = np.zeros(4, dtype=np.float32)
+        phase_onehot[int(self._phase)] = 1.0
+
+        r = 0.0
+
+        t_sum = float(self._T_last[0] + self._T_last[1])
+        t_scale = max(1e-6, self._t_max_base)
+        v_norm = float(np.linalg.norm(self._v))
+        v_scale = max(1e-6, self._v_max_base)
+        dL = float(np.sum(np.abs(self._L - self._L_prev_for_reward)))
+
+        if self._phase == 0:
+            r += -self.w_d_reach * dist_tip_cube
+            # FIX (1): remove directed tip-velocity incentive in phase 0
+            # (keep parameter for API compatibility, but do not apply it here)
+            r += self.w_prog_reach * reach_progress
+
+            # FIX (3): apply weak impulse penalties already in phase 0
+            s0 = float(self._phase0_impulse_penalty_scale)
+            r -= s0 * self.vspool_penalty_coef * (v_norm / v_scale)
+            r -= s0 * self.tension_penalty_coef * (t_sum / t_scale)
+            r += -s0 * self.w_L * dL
+            r += -s0 * self.w_T * (t_sum / t_scale)
+        else:
+            k = float(int(stats["num_link_contacts"]))
+            r += -self.w_cb * dist_cube_base
+            r += self.w_c * k
+            r += -self.w_vc * cube_speed
+            r += -self.w_T * (t_sum / t_scale)
+            r += -self.w_L * dL
+            r -= self.vspool_penalty_coef * (v_norm / v_scale)
+            r -= self.tension_penalty_coef * (t_sum / t_scale)
+
+        flew = (cube_speed > self.v_fly_threshold) or (cube_z > self.z_fly_threshold)
+        if flew:
+            r -= self.fly_penalty
+
+        r -= self.ctrl_energy_cost * ctrl_energy
+        r -= self.action_smooth_cost * float(np.sum(np.square(action_u - self._last_action_u)))
+
+        if not np.isfinite(r):
+            r = -10.0
+
+        if abs(float(cube[0])) > self.arena_half or abs(float(cube[1])) > self.arena_half:
+            r -= 6.0
+
+        if float(cube[2]) > 0.25:
+            r -= 2.0 * (float(cube[2]) - 0.25)
+
+        self._prev_tip_to_cube = dist_tip_cube
+
+        info = {
+            "phase": int(self._phase),
+            "phase_onehot": phase_onehot,
+            "dist_tip_to_cube": float(dist_tip_cube),
+            "dist_cube_to_base": float(dist_cube_base),
+            "cube_speed": float(cube_speed),
+            "cube_z": float(cube_z),
+            "num_contacts": int(stats["num_link_contacts"]),
+            "cube_on_floor": bool(stats["cube_on_floor"]),
+            "in_grasp": bool(grasp),
+            "fly_event": bool(flew),
+            "t_left": float(self._T_last[0]),
+            "t_right": float(self._T_last[1]),
+            "dL": float(dL),
+        }
+        return float(r), info
+
+    def _get_obs(self, phase_onehot: np.ndarray, grasp: bool, stats: Dict[str, Any]) -> np.ndarray:
+        qpos = self.data.qpos.ravel().copy()
+        qvel = self.data.qvel.ravel().copy()
+
+        base = self._pos_base()
+        tip = self._pos_tip()
+        cube = self._pos_cube()
+
+        v_cube = self._vel_cube_lin()
+
+        rel_cube_tip = cube - tip
+        rel_goalb_cube = self.goal_b - cube
+        rel_goala_cube = self.goal_a - cube
+
+        aggregates = np.array(
+            [
+                1.0 if grasp else 0.0,
+                float(int(stats["num_link_contacts"])),
+                1.0 if bool(stats["cube_on_floor"]) else 0.0,
+            ],
+            dtype=np.float32,
+        )
+
+        drive = np.concatenate([self._L, self._v, self._u_filt], axis=0).astype(np.float32)
+
+        obs = np.concatenate(
+            [
+                qpos.astype(np.float32),
+                qvel.astype(np.float32),
+                base.astype(np.float32),
+                tip.astype(np.float32),
+                cube.astype(np.float32),
+                rel_cube_tip.astype(np.float32),
+                rel_goalb_cube.astype(np.float32),
+                rel_goala_cube.astype(np.float32),
+                v_cube.astype(np.float32),
+                drive,
+                phase_onehot.astype(np.float32),
+                aggregates,
+            ],
+            axis=0,
+        )
+
+        if not np.all(np.isfinite(obs)):
+            obs = np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+        return obs
+
+    def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
+        if seed is not None:
+            self.np_random, _ = gym.utils.seeding.np_random(seed)
+
         mujoco.mj_resetData(self.model, self.data)
-        self.step_counter = 0
-        self.hold_steps = 0
-        self.prev_dist_tip_ball = None
-        self.prev_dist_ball_base = None
-        self.prev_action[:] = 0.0
-        self.ball_init_pos = None
-        self.ball_init_base_dist = None
-        self.sym_sign = 1.0
 
-        # чуть рандома в начальной позе
-        self.data.qpos[:] += 0.02 * self.np_random.normal(size=self.qpos_n)
-        mujoco.mj_forward(self.model, self.data)
+        self._step = 0
+        self._phase = 0
 
-        base_pos = self._base_pos()
-        tip_pos = self._tip_pos()
-        base_xy = base_pos[:2]
-        tip_xy = tip_pos[:2]
-        base_z = base_pos[2]
+        self._L[:] = 0.0
+        self._v[:] = 0.0
+        self._u_prev[:] = 0.0
+        self._u_filt[:] = 0.0
 
-        link_positions = self.data.xpos[self.link_body_ids]
+        self._grasp_v_scale_state = 1.0
+        self._grasp_t_scale_state = 1.0
 
-        dir_xy = tip_xy - base_xy
-        norm_xy = np.linalg.norm(dir_xy)
-        if norm_xy < 1e-6:
-            dir_xy = np.array([1.0, 0.0])
-            norm_xy = 1.0
-        dir_xy_unit = dir_xy / norm_xy
-        dist_base_tip_xy = norm_xy
+        self._prev_tip_to_cube = None
+        self._last_action_u[:] = 0.0
 
-        perp_xy = np.array([-dir_xy_unit[1], dir_xy_unit[0]], dtype=float)
+        self._L_prev_for_reward[:] = self._L
 
-        clearance = self.ball_radius + self.base_radius * 1.2
+        if self.dr_enable:
+            self._apply_domain_randomization()
 
-        ball_pos = None
-        last_candidate = None
+        qpos_noise = self.np_random.normal(0.0, 0.015, size=(self.nq,)).astype(np.float64)
+        self.data.qpos[:] = self.data.qpos[:] + qpos_noise
+        self.data.qvel[:] = 0.0
 
-        for _ in range(40):
-            s = self.np_random.uniform(0.35, 0.9) * dist_base_tip_xy
-            d_min = 0.08 * self.total_length
-            d_max = 0.30 * self.total_length
-            d_perp = self.np_random.uniform(d_min, d_max)
-            side = 1.0 if self.np_random.random() < 0.5 else -1.0
+        xy = self.goal_a[:2].copy()
+        xy += self.np_random.uniform(-self.cube_spawn_xy_jitter, self.cube_spawn_xy_jitter, size=(2,)).astype(np.float64)
+        xy[0] = _clip(float(xy[0]), -self.arena_half * 0.8, self.arena_half * 0.8)
+        xy[1] = _clip(float(xy[1]), -self.arena_half * 0.8, self.arena_half * 0.8)
+        z = max(self._cube_half + 0.003, float(self.goal_a[2]))
 
-            ball_xy = base_xy + dir_xy_unit * s + perp_xy * (side * d_perp)
-            z = max(base_z, self.ball_radius) + 0.005
+        self.data.qpos[self.cube_qpos_adr + 0] = float(xy[0])
+        self.data.qpos[self.cube_qpos_adr + 1] = float(xy[1])
+        self.data.qpos[self.cube_qpos_adr + 2] = float(z)
 
-            candidate = np.array([ball_xy[0], ball_xy[1], z], dtype=float)
-            last_candidate = candidate
-
-            dists = np.linalg.norm(link_positions - candidate, axis=1)
-            if float(dists.min()) > clearance:
-                ball_pos = candidate
-                break
-
-        if ball_pos is None:
-            ball_pos = last_candidate
-
-        self.data.qpos[self.ball_qpos_adr : self.ball_qpos_adr + 3] = ball_pos
-        self.data.qvel[self.ball_dof_adr : self.ball_dof_adr + 6] = 0.0
+        self.data.qpos[self.cube_qpos_adr + 3 : self.cube_qpos_adr + 7] = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+        self.data.qvel[self.cube_dof_adr : self.cube_dof_adr + 6] = 0.0
 
         mujoco.mj_forward(self.model, self.data)
 
-        self.ball_init_pos = self._ball_pos().copy()
-        base_pos = self._base_pos()
-        self.ball_init_base_dist = float(
-            np.linalg.norm(self.ball_init_pos - base_pos)
-        )
+        ell = self._tendon_lengths()
+        self._ell_rest[:] = ell
+        self._ell_prev[:] = ell
 
-        # определяем сторону шара по оси Y для симметрии
-        self.sym_sign = (
-            1.0 if self.ball_init_pos[1] >= base_pos[1] else -1.0
-        )
+        ell_des = (self._ell_rest - self._L) + self.ell_rest_bias
+        self._e_prev[:] = (ell - ell_des)
 
-        tip_pos = self._tip_pos()
-        self.prev_dist_tip_ball = float(
-            np.linalg.norm(tip_pos - self.ball_init_pos)
-        )
-        self.prev_dist_ball_base = self.ball_init_base_dist
+        self._T_last[:] = 0.0
 
-        obs = self._get_obs()
-        return obs, {}
+        stats = self._contact_stats()
+        grasp, _ = self._is_grasp(stats)
 
-    def step(self, action):
-        self.step_counter += 1
+        base = self._pos_base()
+        cube = self._pos_cube()
+        self._initial_cube_to_base = float(_safe_norm(cube - base))
 
-        action = np.clip(action, -1.0, 1.0)
+        phase_oh = np.zeros(4, dtype=np.float32)
+        phase_oh[0] = 1.0
+        obs = self._get_obs(phase_oh, grasp, stats)
 
-        # сопоставляем "канонические" действия с реальными тросами
-        # motor_0 - левый (Y>0), motor_1 - правый (Y<0)
-        if self.sym_sign > 0:
-            left_ctrl = action[0]
-            right_ctrl = action[1]
-        else:
-            left_ctrl = action[1]
-            right_ctrl = action[0]
+        info = {
+            "phase": int(self._phase),
+            "success": False,
+            "dist_tip_to_cube": float(_safe_norm(self._pos_cube() - self._pos_tip())),
+            "dist_cube_to_base": float(_safe_norm(self._pos_cube() - self._pos_base())),
+            "num_contacts": int(stats["num_link_contacts"]),
+            "cube_speed": float(np.linalg.norm(self._vel_cube_lin())),
+            "in_grasp": bool(grasp),
+            "t_left": float(self._T_last[0]),
+            "t_right": float(self._T_last[1]),
+        }
+        return obs, info
 
-        self.data.ctrl[0] = left_ctrl * self.ctrl_scale
-        self.data.ctrl[1] = right_ctrl * self.ctrl_scale
+    def step(self, action: np.ndarray):
+        self._step += 1
+
+        u = np.clip(np.asarray(action, dtype=np.float64).reshape(2,), -1.0, 1.0)
+
+        # FIX (2): remove 1-step lag by using contacts from the current (pre-control) state
+        stats_pre = self._contact_stats()
+        contact_hint = bool(int(stats_pre["num_link_contacts"]) >= 1)
+
+        self._update_spools_and_ctrl(u, contact_hint=contact_hint)
+        ctrl_energy = float(np.sum(np.square(self.data.ctrl[:2])))
 
         for _ in range(self.substeps):
             mujoco.mj_step(self.model, self.data)
+            if not np.all(np.isfinite(self.data.qpos)) or not np.all(np.isfinite(self.data.qvel)):
+                break
 
-        obs = self._get_obs()
-        (
-            reward,
-            success,
-            dist_tip_ball,
-            disp,
-            speed,
-            wrap_term,
-            in_contact,
-        ) = self._compute_reward(action)
+        stats_post = self._contact_stats()
+        grasp, grasp_metrics = self._is_grasp(stats_post)
 
-        terminated = success
-        truncated = self.step_counter >= self.max_episode_steps
+        reward, info = self._compute_reward(u, ctrl_energy, stats_post, grasp, grasp_metrics)
 
-        info = {
-            "success": success,
-            "dist_tip_ball": dist_tip_ball,
-            "ball_disp": disp,
-            "ball_speed": speed,
-            "wrap_term": wrap_term,
-            "in_contact": in_contact,
-            "hold_steps": self.hold_steps,
-        }
+        dist_cube_base = float(info["dist_cube_to_base"])
+        cube_speed = float(info["cube_speed"])
+        contacts_ok = int(info["num_contacts"]) >= int(self.grasp_min_contacts)
+        speed_ok = cube_speed < float(self.v_soft)
+        closer_ok = dist_cube_base < float(self.alpha_success) * max(1e-9, float(self._initial_cube_to_base))
+        success = bool(closer_ok and speed_ok and contacts_ok)
+
+        terminated = bool(success)
+
+        cube = self._pos_cube()
+        out_of_arena = (abs(float(cube[0])) > self.arena_half) or (abs(float(cube[1])) > self.arena_half)
+        flew = float(cube[2]) > 0.35
+        nan_state = (not np.all(np.isfinite(self.data.qpos))) or (not np.all(np.isfinite(self.data.qvel)))
+
+        truncated = False
+        if self._step >= self.max_episode_steps:
+            truncated = True
+        if out_of_arena or flew or nan_state:
+            truncated = True
+            reward -= 10.0
+
+        info.update(
+            {
+                "success": bool(success),
+                "terminated": bool(terminated),
+                "truncated": bool(truncated),
+                "drive_v_max": float(self._v_max_base),
+                "drive_t_max": float(self._t_max_base),
+                "drive_tau": float(self._u_tau),
+                "drive_du_max": float(self._du_max),
+                "enc_noise": float(self._enc_noise),
+                "v_spool": float(np.linalg.norm(self._v)),
+                "initial_dist_cube_to_base": float(self._initial_cube_to_base),
+            }
+        )
+
+        self._last_action_u = u.copy()
+        self._L_prev_for_reward[:] = self._L
+
+        obs = self._get_obs(info["phase_onehot"], bool(grasp), stats_post)
 
         if self.render_mode == "human":
             self.render()
 
-        return obs, reward, terminated, truncated, info
-
-    # ---------- viewer ----------
+        return obs, float(reward), terminated, truncated, info
 
     def render(self):
         if self.render_mode != "human":
             return
-        if self.viewer is None:
+        if self._viewer is None:
             import mujoco.viewer
 
-            self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
+            self._viewer = mujoco.viewer.launch_passive(self.model, self.data)
+            time.sleep(0.02)
         else:
-            self.viewer.sync()
+            self._viewer.sync()
 
     def close(self):
-        self.viewer = None
+        self._viewer = None
