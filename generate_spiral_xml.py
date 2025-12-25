@@ -24,13 +24,13 @@ class SpiralParams:
     delta_deg: float = 30.0
 
     # Логарифмическая спираль: r(θ) = a·exp(bθ), b = cot(ψ)
-    psi_deg: float = 77.6
+    psi_deg: float = 75
 
     # Длина в развернутом состоянии
     total_length: float = 0.45
 
     # Геометрия звена
-    tip_width: float = 0.0075
+    tip_width: float = 0.0045 # 0.0075
     tip_thickness: float = 0.0024  # увеличенная толщина по z для хватания кубика
 
     # Подъем над полом
@@ -154,6 +154,9 @@ def generate_spiral_tentacle_xml(
 ) -> str:
     unit_obj = _ensure_unit_mesh_obj()
     unit_xmin, unit_xmax = _obj_x_bounds(unit_obj)
+    unit_xspan = unit_xmax - unit_xmin
+    if unit_xspan <= 1e-12:
+        raise ValueError(f"Bad OBJ x-span: {unit_obj}")
 
     # q = exp(bΔθ), b = cot(ψ)
     delta = math.radians(delta_deg)
@@ -182,7 +185,8 @@ def generate_spiral_tentacle_xml(
     # L_tip так, чтобы сумма геом. прогрессии дала total_length
     L_tip = total_length * (q - 1.0) / (q**n_segments - 1.0)
 
-    sx_tip = L_tip
+    # sx ???????????? OBJ, ? ???????? ????? ?? X = unit_xspan * sx
+    sx_tip = L_tip / unit_xspan
     sy_tip = tip_width / max(1e-12, unit_y_over_x)
     sz_tip = tip_thickness
 
@@ -194,8 +198,8 @@ def generate_spiral_tentacle_xml(
     inertia_min = 1e-6
 
     # Контакт: быстрый (меньше проникновения), но без чрезмерного "раннего" упора
-    solimp = "0.995 0.995 0.0005"
-    solref = "0.0015 1.0"
+    solimp = "0.998 0.998 0.0002"
+    solref = "0.001 1.0"
     friction = "1.0 0.01 0.0001"
 
     meshes_xml: list[str] = []
@@ -226,7 +230,7 @@ def generate_spiral_tentacle_xml(
         sy = sy_tip * s
         sz = sz_tip * s
 
-        L = sx
+        L = unit_xspan * sx
         W = sy * unit_y_over_x
         T = sz
 
@@ -246,15 +250,16 @@ def generate_spiral_tentacle_xml(
         Izz[i] = izz
 
         mesh_name = f"hex_{i:02d}"
+        mesh_col_name = f"hexc_{i:02d}"
+        shrink = 0.86
         meshes_xml.append(
             f'<mesh name="{mesh_name}" file="{unit_obj}" scale="{_fmt(sx)} {_fmt(sy)} {_fmt(sz)}"/>'
         )
+        meshes_xml.append(
+            f'<mesh name="{mesh_col_name}" file="{unit_obj}" scale="{_fmt(sx*shrink)} {_fmt(sy*shrink)} {_fmt(sz*shrink)}"/>'
+        )
 
         # исключаем контакт ближайших сегментов, но не даем "пролезать" через базу
-        if i >= 1:
-            excludes_xml.append(
-                f'<exclude body1="link_{i-1:02d}" body2="link_{i:02d}"/>'
-            )
 
 
         tendon_sites_left.append(f"site_left_{i:02d}")
@@ -329,21 +334,31 @@ def generate_spiral_tentacle_xml(
         )
 
         mesh_name = f"hex_{i:02d}"
+        mesh_col_name = f"hexc_{i:02d}"
+        shrink = 0.86
 
         # margin умеренный: уменьшили, чтобы не мешать плотной упаковке и форме "?"
-        margin = 0.00018# * (scale[i] ** 0.25)
+        margin = 0.00010# * (scale[i] ** 0.25)
 
         # ?????, ????? min-x ????? ? frame ????? ??? ????? 0
         # x_world = x_obj * sx + geom_x
         # min(x_world) = unit_xmin*sx + geom_x = 0  -> geom_x = -unit_xmin*sx
         geom_x = -unit_xmin * (sx_tip * scale[i])
         geom_pos = f"{_fmt(geom_x)} 0 0"
-        geom_xml = (
-            f'<geom name="geom_{i:02d}" type="mesh" mesh="{mesh_name}" '
+        # --- visual (полная геометрия, без контакта)
+        geom_visual = (
+            f'<geom name="geom_vis_{i:02d}" type="mesh" mesh="{mesh_name}" '
+            f'pos="{geom_pos}" '
+            f'contype="0" conaffinity="0" '
+            f'rgba="0.9 0.9 0.9 1"/>'
+        )
+        # --- collision (уменьшенный mesh)
+        geom_collision = (
+            f'<geom name="geom_col_{i:02d}" type="mesh" mesh="{mesh_col_name}" '
             f'pos="{geom_pos}" '
             f'friction="{friction}" solimp="{solimp}" solref="{solref}" '
             f'contype="1" conaffinity="1" condim="3" '
-            f'margin="{_fmt(margin)}"/>'
+            f'margin="{_fmt(margin)}" gap="0.00015"/>'
         )
 
         # Базовый стоппер от самопрохождения
@@ -395,7 +410,8 @@ def generate_spiral_tentacle_xml(
         if joint_xml:
             body_lines.append(f"{indent * (i + 1)}{joint_xml}")
         body_lines.append(f"{indent * (i + 1)}{inertial_xml}")
-        body_lines.append(f"{indent * (i + 1)}{geom_xml}")
+        body_lines.append(f"{indent * (i + 1)}{geom_visual}")
+        body_lines.append(f"{indent * (i + 1)}{geom_collision}")
         # ???????????? ?????????: ?????? ???????, ????? ????? ?? "????????" ? 3D
         sole = (
             f'<geom name="sole_{i:02d}" type="box" '
