@@ -8,45 +8,36 @@ from pathlib import Path
 import mujoco
 import mujoco.viewer
 import numpy as np
-try:
-    import trimesh
-except Exception:
-    trimesh = None
+import trimesh
+
 from pynput import keyboard
 
 
 N_SEGMENTS = 19
 TARGET_LENGTH_M = 0.20
-GEAR = 10.0
-ALPHA_DEFAULT = 0.985
+GEAR = 100.0
+ALPHA_DEFAULT = 0.992
 ALPHA_STEP = 0.002
 ALPHA_MIN = 0.90
 ALPHA_MAX = 0.9995
 
-T_STEP_DEFAULT = 0.5
-T_MAX = 10.0
+T_STEP_DEFAULT = 0.1
+T_MAX = 100.0
 
 TIMESTEP = 0.0005
 
 FRICTION = "1.1 0.02 0.0001"
 SOLIMP = "0.998 0.998 0.0002"
-SOLREF = "0.006 1.0"
-MARGIN = 0.00012
-GAP = 0.00005
-DENSITY = 600.0
-GEOM_EULER = "0 0 -1.57079632679"
+SOLREF = "0.003 1.0"
+MARGIN = 0.00025
+GAP = 0.0000 #5
+DENSITY = 1400.0
+GEOM_EULER = "0 0 0"
 CLEARANCE_X = 0.0006
-CLEARANCE_X = max(CLEARANCE_X, 4.0 * MARGIN + 4.0 * GAP)
-COL_MESH_DIRNAME = "_col_meshes"
-ROT_ANGLE_RAD = -0.5 * math.pi
-ROT_MAT = np.array(
-    [
-        [0.0, 1.0, 0.0],
-        [-1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0],
-    ],
-    dtype=float,
-)
+SPRING_STIFFNESS = 0.06
+SITE_X_FRAC = 0.15
+SITE_X_MIN = 0.0006
+PIVOT_X = 0.0010
 
 
 def _fmt(x: float) -> str:
@@ -72,7 +63,7 @@ def build_mjcf() -> str:
         raise SystemExit("ERROR: trimesh is not installed. Install with: pip install trimesh")
 
     base_dir = Path(__file__).resolve().parent
-    stl_dir = base_dir / "assets" / "spiral_tent_stls"
+    stl_dir = base_dir / "assets" / "spiral_tent_stls_vir"
     if not stl_dir.is_dir():
         raise SystemExit(f"ERROR: STL directory not found: {stl_dir}")
 
@@ -81,32 +72,17 @@ def build_mjcf() -> str:
         if not path.exists():
             raise SystemExit(f"ERROR: Missing STL file: {path}")
 
-    col_dir = base_dir / COL_MESH_DIRNAME
-    col_dir.mkdir(exist_ok=True)
-
     seg_info = []
-    col_paths: list[Path] = []
     measured_length = 0.0
-    rot_T = np.eye(4)
-    rot_T[:3, :3] = ROT_MAT
-
-    for i, path in enumerate(stl_paths):
+    for path in stl_paths:
         mesh = trimesh.load_mesh(str(path), force="mesh")
         if mesh.is_empty:
             raise SystemExit(f"ERROR: Empty mesh: {path}")
-        col_path = col_dir / f"seg_{i:02d}_col.stl"
-        try:
-            mesh.convex_hull.export(str(col_path))
-        except Exception as exc:
-            raise SystemExit(f"ERROR: Failed to build convex hull for {path}") from exc
-        col_paths.append(col_path)
-        mesh_rot = mesh.copy()
-        mesh_rot.apply_transform(rot_T)
-        bounds = mesh_rot.bounds
+        bounds = mesh.bounds
         xmin, ymin, zmin = bounds[0]
         xmax, ymax, zmax = bounds[1]
         xspan = float(xmax - xmin)
-        vx = mesh_rot.vertices[:, 0]
+        vx = mesh.vertices[:, 0]
         x_back_q = float(np.quantile(vx, 0.005))
         x_front_q = float(np.quantile(vx, 0.995))
         xspan_eff = x_front_q - x_back_q
@@ -128,7 +104,7 @@ def build_mjcf() -> str:
                 "zspan": zspan,
             }
         )
-        measured_length += xspan
+        measured_length += xspan_eff
 
     if measured_length <= 0.0:
         raise SystemExit("ERROR: Bad measured length from STL bounds")
@@ -151,11 +127,7 @@ def build_mjcf() -> str:
     mesh_lines = []
     for i in range(N_SEGMENTS):
         mesh_lines.append(
-            f'<mesh name="meshV_{i:02d}" file="seg_{i:02d}.stl" '
-            f'scale="{_fmt(scale_factor)} {_fmt(scale_factor)} {_fmt(scale_factor)}"/>'
-        )
-        mesh_lines.append(
-            f'<mesh name="meshC_{i:02d}" file="{col_paths[i].as_posix()}" '
+            f'<mesh name="mesh_{i:02d}" file="seg_{i:02d}.stl" '
             f'scale="{_fmt(scale_factor)} {_fmt(scale_factor)} {_fmt(scale_factor)}"/>'
         )
 
@@ -164,41 +136,39 @@ def build_mjcf() -> str:
     for i in range(N_SEGMENTS):
         info = seg_info[i]
         yspan = info["yspan"] * scale_factor
-        xmin_s = info["xmin"] * scale_factor
+        x_back_s = info["x_back_q"] * scale_factor
         y_center_s = 0.5 * (info["ymin"] + info["ymax"]) * scale_factor
         z_center_s = 0.5 * (info["zmin"] + info["zmax"]) * scale_factor
-        geom_pos = (-xmin_s, -y_center_s, -z_center_s)
 
+        geom_pos = (-(x_back_s + PIVOT_X), -y_center_s, -z_center_s)
+
+        xlen_s = info["xspan_eff"] * scale_factor
+        site_x = max(SITE_X_MIN, SITE_X_FRAC * xlen_s) + 0.5 * CLEARANCE_X
         y_site = 0.5 * yspan - 0.002
-        y_site = max(0.0005, y_site)
-        site_pos_l = f"{_fmt(0.002 + 0.5 * CLEARANCE_X)} {_fmt(y_site)} 0"
-        site_pos_r = f"{_fmt(0.002 + 0.5 * CLEARANCE_X)} {_fmt(-y_site)} 0"
+        y_site = max(y_site, 0.0022)
+
+        site_pos_l = f"{_fmt(site_x)} {_fmt(y_site)} 0"
+        site_pos_r = f"{_fmt(site_x)} {_fmt(-y_site)} 0"
 
         if i == 0:
             body_pos = "0 0 0"
         else:
-            body_pos = f"{_fmt(seg_info[i - 1]['xspan'] * scale_factor + CLEARANCE_X)} 0 0"
+            body_pos = f"{_fmt(seg_info[i - 1]['xspan_eff'] * scale_factor + CLEARANCE_X)} 0 0"
 
         body_lines.append(f"{indent * i}<body name=\"seg_{i:02d}\" pos=\"{body_pos}\">")
         if i > 0:
             body_lines.append(
                 f"{indent * (i + 1)}<joint name=\"joint_{i:02d}\" type=\"hinge\" "
-                f"axis=\"0 0 1\" limited=\"true\" range=\"-3.2 3.2\" "
-                f"damping=\"0.008\" frictionloss=\"0.002\" armature=\"0.002\"/>"
+                f"axis=\"0 0 1\" limited=\"true\" range=\"-0.52 0.52\" "
+                f"stiffness=\"{_fmt(SPRING_STIFFNESS)}\" springref=\"0\" "
+                f"damping=\"0.008\" frictionloss=\"0.002\"/>"
             )
 
         body_lines.append(
-            f"{indent * (i + 1)}<geom name=\"geom_vis_{i:02d}\" type=\"mesh\" "
-            f"mesh=\"meshV_{i:02d}\" pos=\"{_fmt(geom_pos[0])} {_fmt(geom_pos[1])} {_fmt(geom_pos[2])}\" "
+            f"{indent * (i + 1)}<geom name=\"geom_{i:02d}\" type=\"mesh\" "
+            f"mesh=\"mesh_{i:02d}\" pos=\"{_fmt(geom_pos[0])} {_fmt(geom_pos[1])} {_fmt(geom_pos[2])}\" "
             f"euler=\"{GEOM_EULER}\" "
             f"density=\"{_fmt(DENSITY)}\" rgba=\"0.85 0.86 0.9 1\" "
-            f"contype=\"0\" conaffinity=\"0\"/>"
-        )
-        body_lines.append(
-            f"{indent * (i + 1)}<geom name=\"geom_col_{i:02d}\" type=\"mesh\" "
-            f"mesh=\"meshC_{i:02d}\" pos=\"{_fmt(geom_pos[0])} {_fmt(geom_pos[1])} {_fmt(geom_pos[2])}\" "
-            f"euler=\"{GEOM_EULER}\" "
-            f"mass=\"0\" rgba=\"0 0 0 0\" "
             f"condim=\"3\" contype=\"1\" conaffinity=\"1\" "
             f"friction=\"{FRICTION}\" solimp=\"{SOLIMP}\" solref=\"{SOLREF}\" "
             f"margin=\"{_fmt(MARGIN)}\" gap=\"{_fmt(GAP)}\"/>"
@@ -290,6 +260,15 @@ def main() -> None:
     model = mujoco.MjModel.from_xml_string(xml)
     data = mujoco.MjData(model)
 
+    jid = _find_id(model, mujoco.mjtObj.mjOBJ_JOINT, "joint_01")
+    if jid >= 0:
+        qadr = int(model.jnt_qposadr[jid])
+        jrange = model.jnt_range[jid]
+        print(f"joint_01 range: {jrange[0]:.6g} {jrange[1]:.6g}")
+        print(f"joint_01 qpos: {data.qpos[qadr]:.6g}")
+    else:
+        print("joint_01 not found")
+
     motor_left_ids = []
     motor_right_ids = []
     tendon_left_ids = []
@@ -347,13 +326,13 @@ def main() -> None:
         elif k in ("]", "ъ"):
             ctrl.T_step = min(20.0, ctrl.T_step * 1.25)
         elif k == "1":
-            ctrl.T_left, ctrl.T_right = 210.0, 0.0
+            ctrl.T_left, ctrl.T_right = 30.0, 0.0
         elif k == "2":
-            ctrl.T_left, ctrl.T_right = 40.0, 100.0
+            ctrl.T_left, ctrl.T_right = 0.0, 30.0
         elif k == "3":
-            ctrl.T_left, ctrl.T_right = 10.0, 60.0
+            ctrl.T_left, ctrl.T_right = 10.0, 30.0
         elif k == "4":
-            ctrl.T_left, ctrl.T_right = 0.0, 60.0
+            ctrl.T_left, ctrl.T_right = 30.0, 10.0
         elif k in (",", "б"):
             ctrl.alpha = _clip(ctrl.alpha - ALPHA_STEP, ALPHA_MIN, ALPHA_MAX)
         elif k in (".", "ю"):
