@@ -1,0 +1,1 @@
+assets/spiral_tent_stls/_convex_cache/seg_05_part_00.obj

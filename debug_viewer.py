@@ -119,7 +119,7 @@ def main() -> None:
         elif k == "]":
             ctrl.T_step = min(20.0, ctrl.T_step * 1.25)
         elif k == "1":
-            ctrl.T_left, ctrl.T_right = 40.0, 40.0
+            ctrl.T_left, ctrl.T_right = 210.0, 0.0
         elif k == "2":
             ctrl.T_left, ctrl.T_right = 40.0, 100.0
         elif k == "3":

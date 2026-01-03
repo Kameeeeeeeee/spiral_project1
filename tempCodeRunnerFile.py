@@ -1,242 +1,381 @@
-# debug_viewer.py
-#
-# Force-only debug viewer (как в статье): только tendon motor и управление натяжением.
-# Ключевые правки:
-# 1) Удалено ВСЕ, что добавляло моменты через data.qfrc_applied.
-# 2) Удалены propagate_tension и любые "виртуальные" потери. Сейчас один источник изгиба: натяжение троса.
-# 3) Добавлен квазистатический режим: плавный ramp сил (Tcmd -> Ttarget) для воспроизведения формы "?".
-# 4) Добавлены пресеты сценариев Packing/Reaching/Wrapping и печать статусов 10 Гц.
-#
-# Управление:
-# a/z: увеличить/уменьшить цель Ttarget_left (Н)
-# k/m: увеличить/уменьшить цель Ttarget_right (Н)
-# [ ]: изменить шаг dT (Н)
-# , .: изменить скорость ramp (Н/с)
-#
-# Пресеты:
-# 1: Packing (25,25)
-# 2: Reaching-right (25,60)
-# 3: Wrapping-right (0,60)
-# 4: Reaching-left (60,25)
-# 5: Wrapping-left (60,0)
-# 0: Release (0,0)
-#
-# r: reset (и новый спавн кубика, если ты передашь другой seed в XML вручную)
-# q: quit
-
 from __future__ import annotations
 
 import math
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import mujoco
 import mujoco.viewer
+import numpy as np
+try:
+    import trimesh
+except Exception:
+    trimesh = None
 from pynput import keyboard
 
-from generate_spiral_xml import generate_spiral_tentacle_xml
+
+N_SEGMENTS = 19
+TARGET_LENGTH_M = 0.20
+GEAR = 210.0
+ALPHA_DEFAULT = 0.985
+ALPHA_STEP = 0.002
+ALPHA_MIN = 0.90
+ALPHA_MAX = 0.9995
+
+T_STEP_DEFAULT = 2.0
+T_MAX = 210.0
+
+TIMESTEP = 0.001
+
+FRICTION = "1.1 0.02 0.0001"
+SOLIMP = "0.998 0.998 0.0002"
+SOLREF = "0.001 1.0"
+MARGIN = 0.0001
+GAP = 0.00015
+DENSITY = 600.0
+GEOM_EULER = "0 0 -1.57079632679"
 
 
-@dataclass
-class ForceUI:
-    # Текущие силы (плавно догоняют таргеты)
-    T_left: float = 0.0
-    T_right: float = 0.0
-
-    # Целевые силы, которые меняются клавишами
-    Tt_left: float = 0.0
-    Tt_right: float = 0.0
-
-    # Шаг по клавишам
-    dT: float = 2.0
-
-    # Реалистичный лимит (статья: десятки ньютонов)
-    Tmax: float = 80.0
-
-    # Скорость квазистатического ramp (Н/с)
-    ramp_rate: float = 40.0
-
-    running: bool = True
+def _fmt(x: float) -> str:
+    return f"{x:.10g}"
 
 
 def _clip(x: float, lo: float, hi: float) -> float:
-    if x < lo:
-        return lo
-    if x > hi:
-        return hi
-    return x
+    return float(np.clip(x, lo, hi))
 
 
-def _ramp(current: float, target: float, rate: float, dt: float) -> float:
-    # Плавная подача силы вместо "ступеньки", чтобы получить квазистатику как в статье
-    if rate <= 0.0:
-        return target
-    max_step = rate * dt
-    if target > current:
-        return min(target, current + max_step)
-    else:
-        return max(target, current - max_step)
+@dataclass
+class ForceController:
+    T_left: float = 0.0
+    T_right: float = 0.0
+    T_step: float = T_STEP_DEFAULT
+    Tmax: float = T_MAX
+    alpha: float = ALPHA_DEFAULT
+    running: bool = True
+
+
+def build_mjcf() -> str:
+    if trimesh is None:
+        raise SystemExit("ERROR: trimesh is not installed. Install with: pip install trimesh")
+
+    base_dir = Path(__file__).resolve().parent
+    stl_dir = base_dir / "assets" / "spiral_tent_stls"
+    if not stl_dir.is_dir():
+        raise SystemExit(f"ERROR: STL directory not found: {stl_dir}")
+
+    stl_paths = [stl_dir / f"seg_{i:02d}.stl" for i in range(N_SEGMENTS)]
+    for path in stl_paths:
+        if not path.exists():
+            raise SystemExit(f"ERROR: Missing STL file: {path}")
+
+    seg_info = []
+    measured_length = 0.0
+    for path in stl_paths:
+        mesh = trimesh.load_mesh(str(path), force="mesh")
+        if mesh.is_empty:
+            raise SystemExit(f"ERROR: Empty mesh: {path}")
+        bounds = mesh.bounds
+        xmin, ymin, zmin = bounds[0]
+        xmax, ymax, zmax = bounds[1]
+        xspan = float(xmax - xmin)
+        yspan = float(ymax - ymin)
+        zspan = float(zmax - zmin)
+        seg_info.append(
+            {
+                "xmin": float(xmin),
+                "ymin": float(ymin),
+                "zmin": float(zmin),
+                "xmax": float(xmax),
+                "ymax": float(ymax),
+                "zmax": float(zmax),
+                "xspan": xspan,
+                "yspan": yspan,
+                "zspan": zspan,
+            }
+        )
+        measured_length += xspan
+
+    if measured_length <= 0.0:
+        raise SystemExit("ERROR: Bad measured length from STL bounds")
+
+    scale_factor = TARGET_LENGTH_M / measured_length
+    scaled_length = measured_length * scale_factor
+
+    base_width = seg_info[0]["yspan"] * scale_factor
+    tip_width = seg_info[-1]["yspan"] * scale_factor
+
+    print("=== STL SCALE SUMMARY ===")
+    print(f"measured_length   = {measured_length:.6f} m")
+    print(f"scale_factor      = {scale_factor:.8f}")
+    print(f"scaled_length     = {scaled_length:.6f} m")
+    print(f"base_width_scaled = {base_width:.6f} m")
+    print(f"tip_width_scaled  = {tip_width:.6f} m")
+
+    meshdir = stl_dir.as_posix()
+
+    mesh_lines = []
+    for i in range(N_SEGMENTS):
+        mesh_lines.append(
+            f'<mesh name="mesh_{i:02d}" file="seg_{i:02d}.stl" '
+            f'scale="{_fmt(scale_factor)} {_fmt(scale_factor)} {_fmt(scale_factor)}"/>'
+        )
+
+    body_lines = []
+    indent = "    "
+    for i in range(N_SEGMENTS):
+        info = seg_info[i]
+        yspan = info["yspan"] * scale_factor
+        xmin_s = info["xmin"] * scale_factor
+        y_center_s = 0.5 * (info["ymin"] + info["ymax"]) * scale_factor
+        z_center_s = 0.5 * (info["zmin"] + info["zmax"]) * scale_factor
+
+        geom_pos = (-xmin_s, -y_center_s, -z_center_s)
+
+        y_site = 0.5 * yspan - 0.002
+        y_site = max(0.0005, y_site)
+        site_pos_l = f"{_fmt(0.002)} {_fmt(y_site)} 0"
+        site_pos_r = f"{_fmt(0.002)} {_fmt(-y_site)} 0"
+
+        if i == 0:
+            body_pos = "0 0 0"
+        else:
+            body_pos = f"{_fmt(seg_info[i - 1]['xspan'] * scale_factor)} 0 0"
+
+        body_lines.append(f"{indent * i}<body name=\"seg_{i:02d}\" pos=\"{body_pos}\">")
+        if i > 0:
+            body_lines.append(
+                f"{indent * (i + 1)}<joint name=\"joint_{i:02d}\" type=\"hinge\" "
+                f"axis=\"0 0 1\" limited=\"true\" range=\"-3.2 3.2\" "
+                f"damping=\"0.03\" frictionloss=\"0.02\"/>"
+            )
+
+        body_lines.append(
+            f"{indent * (i + 1)}<geom name=\"geom_{i:02d}\" type=\"mesh\" "
+            f"mesh=\"mesh_{i:02d}\" pos=\"{_fmt(geom_pos[0])} {_fmt(geom_pos[1])} {_fmt(geom_pos[2])}\" "
+            f"euler=\"{GEOM_EULER}\" "
+            f"density=\"{_fmt(DENSITY)}\" rgba=\"0.85 0.86 0.9 1\" "
+            f"condim=\"3\" contype=\"1\" conaffinity=\"1\" "
+            f"friction=\"{FRICTION}\" solimp=\"{SOLIMP}\" solref=\"{SOLREF}\" "
+            f"margin=\"{_fmt(MARGIN)}\" gap=\"{_fmt(GAP)}\"/>"
+        )
+        body_lines.append(f"{indent * (i + 1)}<site name=\"site_L_{i:02d}\" pos=\"{site_pos_l}\"/>")
+        body_lines.append(f"{indent * (i + 1)}<site name=\"site_R_{i:02d}\" pos=\"{site_pos_r}\"/>")
+
+    for i in reversed(range(N_SEGMENTS)):
+        body_lines.append(f"{indent * i}</body>")
+
+    tendon_lines = []
+    for i in range(N_SEGMENTS - 1):
+        tendon_lines.append(f"    <spatial name=\"tendon_L_{i:02d}_{i+1:02d}\" width=\"0.001\">\n"
+                            f"      <site site=\"site_L_{i:02d}\"/>\n"
+                            f"      <site site=\"site_L_{i+1:02d}\"/>\n"
+                            f"    </spatial>")
+    for i in range(N_SEGMENTS - 1):
+        tendon_lines.append(f"    <spatial name=\"tendon_R_{i:02d}_{i+1:02d}\" width=\"0.001\">\n"
+                            f"      <site site=\"site_R_{i:02d}\"/>\n"
+                            f"      <site site=\"site_R_{i+1:02d}\"/>\n"
+                            f"    </spatial>")
+
+    actuator_lines = []
+    for i in range(N_SEGMENTS - 1):
+        actuator_lines.append(
+            f"    <motor name=\"motor_L_{i:02d}_{i+1:02d}\" tendon=\"tendon_L_{i:02d}_{i+1:02d}\" "
+            f"ctrlrange=\"0 1\" ctrllimited=\"true\" gear=\"{_fmt(GEAR)}\"/>"
+        )
+    for i in range(N_SEGMENTS - 1):
+        actuator_lines.append(
+            f"    <motor name=\"motor_R_{i:02d}_{i+1:02d}\" tendon=\"tendon_R_{i:02d}_{i+1:02d}\" "
+            f"ctrlrange=\"0 1\" ctrllimited=\"true\" gear=\"{_fmt(GEAR)}\"/>"
+        )
+
+    xml = f"""<mujoco model=\"spiral_tentacle_stl\">
+  <compiler angle=\"radian\" coordinate=\"local\" inertiafromgeom=\"true\" meshdir=\"{meshdir}\"/>
+  <option timestep=\"{_fmt(TIMESTEP)}\" gravity=\"0 0 -9.81\" integrator=\"implicitfast\" iterations=\"280\" ls_iterations=\"110\"/>
+  <size njmax=\"20000\" nconmax=\"20000\"/>
+
+  <default>
+    <site size=\"0.001\" rgba=\"0.95 0.2 0.2 0.8\"/>
+  </default>
+
+  <asset>
+    {''.join(mesh_lines)}
+  </asset>
+
+  <worldbody>
+    <light name=\"key\" pos=\"0.2 -0.3 0.4\" dir=\"-0.3 0.4 -0.8\" diffuse=\"0.7 0.7 0.7\"/>
+    <geom name=\"floor\" type=\"plane\" pos=\"0 0 -0.05\" size=\"1 1 0.1\"
+          friction=\"{FRICTION}\" solimp=\"{SOLIMP}\" solref=\"{SOLREF}\"
+          contype=\"1\" conaffinity=\"1\" condim=\"3\" rgba=\"0.2 0.2 0.2 1\"/>
+
+{chr(10).join(body_lines)}
+  </worldbody>
+
+  <tendon>
+{chr(10).join(tendon_lines)}
+  </tendon>
+
+  <actuator>
+{chr(10).join(actuator_lines)}
+  </actuator>
+</mujoco>
+"""
+    return xml
+
+
+def _find_id(model: mujoco.MjModel, obj_type: mujoco.mjtObj, name: str) -> int:
+    try:
+        return mujoco.mj_name2id(model, obj_type, name)
+    except Exception:
+        return -1
+
+
+def _tendon_force(data: mujoco.MjData, tendon_id: int, actuator_id: int) -> float:
+    ten_force = getattr(data, "ten_force", None)
+    if ten_force is not None:
+        return float(ten_force[tendon_id])
+    actuator_force = getattr(data, "actuator_force", None)
+    if actuator_force is not None and actuator_id >= 0:
+        return float(actuator_force[actuator_id])
+    return float("nan")
 
 
 def main() -> None:
-    xml = generate_spiral_tentacle_xml()
+    xml = build_mjcf()
+
     model = mujoco.MjModel.from_xml_string(xml)
     data = mujoco.MjData(model)
 
-    id_motor_left = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "motor_left")
-    id_motor_right = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "motor_right")
-    if id_motor_left < 0 or id_motor_right < 0:
-        raise RuntimeError("Actuators motor_left and motor_right must exist.")
+    motor_left_ids = []
+    motor_right_ids = []
+    tendon_left_ids = []
+    tendon_right_ids = []
 
-    id_tendon_left = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, "tendon_left")
-    id_tendon_right = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TENDON, "tendon_right")
-    if id_tendon_left < 0 or id_tendon_right < 0:
-        raise RuntimeError("Tendons tendon_left and tendon_right must exist.")
+    for i in range(N_SEGMENTS - 1):
+        name_l = f"motor_L_{i:02d}_{i+1:02d}"
+        name_r = f"motor_R_{i:02d}_{i+1:02d}"
+        idx_l = _find_id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name_l)
+        idx_r = _find_id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name_r)
+        if idx_l < 0 or idx_r < 0:
+            raise RuntimeError("Missing actuator id for tendons")
+        motor_left_ids.append(idx_l)
+        motor_right_ids.append(idx_r)
 
-    gear_left = float(model.actuator_gear[id_motor_left][0])
-    gear_right = float(model.actuator_gear[id_motor_right][0])
-    if gear_left <= 0.0 or gear_right <= 0.0:
-        raise RuntimeError("Actuator gear must be positive.")
+        tname_l = f"tendon_L_{i:02d}_{i+1:02d}"
+        tname_r = f"tendon_R_{i:02d}_{i+1:02d}"
+        tid_l = _find_id(model, mujoco.mjtObj.mjOBJ_TENDON, tname_l)
+        tid_r = _find_id(model, mujoco.mjtObj.mjOBJ_TENDON, tname_r)
+        if tid_l < 0 or tid_r < 0:
+            raise RuntimeError("Missing tendon id")
+        tendon_left_ids.append(tid_l)
+        tendon_right_ids.append(tid_r)
 
-    ui = ForceUI()
-
-    def reset_all() -> None:
-        mujoco.mj_resetData(model, data)
-        ui.T_left = 0.0
-        ui.T_right = 0.0
-        ui.Tt_left = 0.0
-        ui.Tt_right = 0.0
-        data.ctrl[id_motor_left] = 0.0
-        data.ctrl[id_motor_right] = 0.0
-        mujoco.mj_forward(model, data)
-
-    def apply_ctrl() -> None:
-        # T = gear * ctrl => ctrl = T/gear, tension-only (T>=0)
-        Tl = _clip(ui.T_left, 0.0, ui.Tmax)
-        Tr = _clip(ui.T_right, 0.0, ui.Tmax)
-        data.ctrl[id_motor_left] = _clip(Tl / gear_left, 0.0, 1.0)
-        data.ctrl[id_motor_right] = _clip(Tr / gear_right, 0.0, 1.0)
-
-    def preset(p: int) -> None:
-        # Пресеты повторяют последовательность из статьи: packing -> reaching -> wrapping
-        if p == 1:
-            ui.Tt_left, ui.Tt_right = 25.0, 25.0
-        elif p == 2:
-            ui.Tt_left, ui.Tt_right = 25.0, 60.0
-        elif p == 3:
-            ui.Tt_left, ui.Tt_right = 0.0, 60.0
-        elif p == 4:
-            ui.Tt_left, ui.Tt_right = 60.0, 25.0
-        elif p == 5:
-            ui.Tt_left, ui.Tt_right = 60.0, 0.0
-        elif p == 0:
-            ui.Tt_left, ui.Tt_right = 0.0, 0.0
+    ctrl = ForceController()
 
     def on_press(key) -> None:
         try:
-            ch = key.char
+            k = key.char
         except AttributeError:
-            ch = None
+            k = None
 
-        if ch == "a":
-            ui.Tt_left = _clip(ui.Tt_left + ui.dT, 0.0, ui.Tmax)
-        elif ch == "z":
-            ui.Tt_left = _clip(ui.Tt_left - ui.dT, 0.0, ui.Tmax)
-        elif ch == "k":
-            ui.Tt_right = _clip(ui.Tt_right + ui.dT, 0.0, ui.Tmax)
-        elif ch == "m":
-            ui.Tt_right = _clip(ui.Tt_right - ui.dT, 0.0, ui.Tmax)
+        if key == keyboard.Key.space:
+            ctrl.T_left = 0.0
+            ctrl.T_right = 0.0
+            return
 
-        elif ch == "[":
-            ui.dT = max(0.5, ui.dT * 0.8)
-        elif ch == "]":
-            ui.dT = min(20.0, ui.dT * 1.25)
+        if k is None:
+            if key == keyboard.Key.esc:
+                ctrl.running = False
+            return
 
-        elif ch == ",":
-            ui.ramp_rate = max(5.0, ui.ramp_rate * 0.8)
-        elif ch == ".":
-            ui.ramp_rate = min(400.0, ui.ramp_rate * 1.25)
-
-        elif ch in ("0", "1", "2", "3", "4", "5"):
-            preset(int(ch))
-
-        elif ch == "r":
-            reset_all()
-        elif ch == "q":
-            ui.running = False
+        if k == "q":
+            ctrl.running = False
+        elif k == "a":
+            ctrl.T_left = _clip(ctrl.T_left + ctrl.T_step, 0.0, ctrl.Tmax)
+        elif k == "z":
+            ctrl.T_left = _clip(ctrl.T_left - ctrl.T_step, 0.0, ctrl.Tmax)
+        elif k == "k":
+            ctrl.T_right = _clip(ctrl.T_right + ctrl.T_step, 0.0, ctrl.Tmax)
+        elif k == "m":
+            ctrl.T_right = _clip(ctrl.T_right - ctrl.T_step, 0.0, ctrl.Tmax)
+        elif k == "[":
+            ctrl.T_step = max(0.5, ctrl.T_step * 0.8)
+        elif k == "]":
+            ctrl.T_step = min(20.0, ctrl.T_step * 1.25)
+        elif k == "1":
+            ctrl.T_left, ctrl.T_right = 210.0, 0.0
+        elif k == "2":
+            ctrl.T_left, ctrl.T_right = 40.0, 100.0
+        elif k == "3":
+            ctrl.T_left, ctrl.T_right = 10.0, 60.0
+        elif k == "4":
+            ctrl.T_left, ctrl.T_right = 0.0, 60.0
+        elif k == ",":
+            ctrl.alpha = _clip(ctrl.alpha - ALPHA_STEP, ALPHA_MIN, ALPHA_MAX)
+        elif k == ".":
+            ctrl.alpha = _clip(ctrl.alpha + ALPHA_STEP, ALPHA_MIN, ALPHA_MAX)
 
     listener = keyboard.Listener(on_press=on_press)
     listener.start()
 
-    reset_all()
-
-    dt = float(model.opt.timestep)
-    steps_per_frame = 8
-    print_hz = 10.0
-    next_print_t = 0.0
-
-    # Для удобства даем подсказку по сценарию "?"
-    print("Presets: 1 packing, 2 reaching-right, 3 wrapping-right, 4 reaching-left, 5 wrapping-left, 0 release")
-    print("To get '?' try: press 1 (wait) -> 2 (wait) -> 3 (after contact or when tip is near object)")
+    t_last = time.time()
+    print_dt = 0.1
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
-        last_t = float(data.time)
+        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = 0
+        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = 0
 
-        while viewer.is_running() and ui.running:
-            t = float(data.time)
-            dt_sim = max(1e-9, t - last_t)
-            last_t = t
+        while viewer.is_running() and ctrl.running:
+            step_start = time.time()
 
-            # Квазистатический ramp к целевым силам
-            ui.T_left = _ramp(ui.T_left, ui.Tt_left, ui.ramp_rate, dt_sim)
-            ui.T_right = _ramp(ui.T_right, ui.Tt_right, ui.ramp_rate, dt_sim)
+            alpha = ctrl.alpha
+            tseg0_l = ctrl.T_left
+            tseg0_r = ctrl.T_right
+            tsegN_l = ctrl.T_left * math.pow(alpha, N_SEGMENTS - 2)
+            tsegN_r = ctrl.T_right * math.pow(alpha, N_SEGMENTS - 2)
+            ctrl0_l = _clip(tseg0_l / GEAR, 0.0, 1.0)
+            ctrl0_r = _clip(tseg0_r / GEAR, 0.0, 1.0)
+            ctrlN_l = _clip(tsegN_l / GEAR, 0.0, 1.0)
+            ctrlN_r = _clip(tsegN_r / GEAR, 0.0, 1.0)
 
-            apply_ctrl()
+            for i, act_id in enumerate(motor_left_ids):
+                tseg = ctrl.T_left * math.pow(alpha, i)
+                data.ctrl[act_id] = _clip(tseg / GEAR, 0.0, 1.0)
+            for i, act_id in enumerate(motor_right_ids):
+                tseg = ctrl.T_right * math.pow(alpha, i)
+                data.ctrl[act_id] = _clip(tseg / GEAR, 0.0, 1.0)
 
-            for _ in range(steps_per_frame):
-                mujoco.mj_step(model, data)
+            mujoco.mj_step(model, data)
+
+            t = time.time()
+            if (t - t_last) >= print_dt:
+                t_last = t
+
+                ten_l0 = _tendon_force(data, tendon_left_ids[0], motor_left_ids[0])
+                ten_ln = _tendon_force(data, tendon_left_ids[-1], motor_left_ids[-1])
+                ten_r0 = _tendon_force(data, tendon_right_ids[0], motor_right_ids[0])
+                ten_rn = _tendon_force(data, tendon_right_ids[-1], motor_right_ids[-1])
+
+                print(
+                    f"Tcmd(L,R)=({ctrl.T_left:6.1f},{ctrl.T_right:6.1f}) N | "
+                    f"Tseg0(L,R)=({tseg0_l:6.1f},{tseg0_r:6.1f}) | "
+                    f"TsegN(L,R)=({tsegN_l:6.1f},{tsegN_r:6.1f}) | "
+                    f"ctrl0(L,R)=({ctrl0_l:.3f},{ctrl0_r:.3f}) | "
+                    f"ctrlN(L,R)=({ctrlN_l:.3f},{ctrlN_r:.3f}) | "
+                    f"tenF(L0,LN,R0,RN)=({ten_l0:6.1f},{ten_ln:6.1f},{ten_r0:6.1f},{ten_rn:6.1f}) | "
+                    f"T_step={ctrl.T_step:.2f} | alpha={ctrl.alpha:.4f}"
+                )
 
             viewer.sync()
 
-            # Печать статусов моторов/тросов/сил
-            t = float(data.time)
-            if t >= next_print_t:
-                ctrlL = float(data.ctrl[id_motor_left])
-                ctrlR = float(data.ctrl[id_motor_right])
+            elapsed = time.time() - step_start
+            sleep = model.opt.timestep - elapsed
+            if sleep > 0:
+                time.sleep(sleep)
 
-                lenL = float(data.ten_length[id_tendon_left])
-                lenR = float(data.ten_length[id_tendon_right])
-
-                velL = float(data.ten_velocity[id_tendon_left])
-                velR = float(data.ten_velocity[id_tendon_right])
-
-                print(
-                    "t="
-                    + f"{t:7.3f}"
-                    + " | T(L,R)="
-                    + f"({ui.T_left:5.1f},{ui.T_right:5.1f})"
-                    + " | Tt(L,R)="
-                    + f"({ui.Tt_left:5.1f},{ui.Tt_right:5.1f})"
-                    + " | ctrl(L,R)="
-                    + f"({ctrlL:5.3f},{ctrlR:5.3f})"
-                    + " | ten_len(L,R)="
-                    + f"({lenL:.4f},{lenR:.4f})"
-                    + " | ten_vel(L,R)="
-                    + f"({velL:+.4f},{velR:+.4f})"
-                    + " | dT="
-                    + f"{ui.dT:.2f}"
-                    + " | ramp="
-                    + f"{ui.ramp_rate:.1f}"
-                    + " | gear="
-                    + f"({gear_left:.1f},{gear_right:.1f})"
-                )
-                next_print_t = t + (1.0 / print_hz)
-
-            # Небольшая пауза, чтобы не грузить CPU
-            time.sleep(max(0.0, steps_per_frame * dt - 0.0005))
-
-    ui.running = False
+    ctrl.running = False
     listener.stop()
+    listener.join(timeout=1.0)
 
 
 if __name__ == "__main__":

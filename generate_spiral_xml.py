@@ -20,17 +20,17 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class SpiralParams:
-    n_segments: int = 24
+    n_segments: int = 19
     delta_deg: float = 30.0
 
     # Логарифмическая спираль: r(θ) = a·exp(bθ), b = cot(ψ)
     psi_deg: float = 75
 
     # Длина в развернутом состоянии
-    total_length: float = 0.45
+    total_length: float = 0.25
 
     # Геометрия звена
-    tip_width: float = 0.0045 # 0.0075
+    tip_width: float = 0.0035 # 0.0075
     tip_thickness: float = 0.0024  # увеличенная толщина по z для хватания кубика
 
     # Подъем над полом

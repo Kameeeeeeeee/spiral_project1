@@ -1,0 +1,1 @@
+assets/spiral_tent_stls/_collision_cache/seg_04_part_00.obj
