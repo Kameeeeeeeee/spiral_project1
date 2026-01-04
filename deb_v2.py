@@ -56,6 +56,16 @@ MU_STATIC = 0.22
 MU_KINETIC = 0.04
 DTRATE_LO = 30.0
 DTRATE_HI = 250.0
+BASE_Z_OFFSET = -0.03
+BALL_RADIUS = 0.012
+BALL_DENSITY = 1000.0
+BALL_Z_CLEARANCE = 0.002
+BALL_CLEARANCE_Y = 0.002
+BALL_FRICTION = "0.1 0.0017 0.0000033"
+BALL_SPAWN_RADIUS = 0.0
+BALL_MIN_Y_CLEAR = 0.0
+BALL_BASE_X = 0.0
+BALL_BASE_Y = 0.0
 
 
 def _fmt(x: float) -> str:
@@ -73,6 +83,26 @@ def _smoothstep(u: float) -> float:
 
 def _lerp(a: float, b: float, u: float) -> float:
     return a + (b - a) * u
+
+
+def _sample_ball_xy(
+    spawn_radius: float,
+    min_y_clear: float,
+    rng: np.random.Generator,
+) -> tuple[float, float]:
+    for _ in range(100):
+        u = float(rng.random())
+        v = float(rng.random())
+        r = spawn_radius * math.sqrt(u)
+        theta = -0.5 * math.pi + math.pi * v
+        ball_x = r * math.cos(theta)
+        ball_y = r * math.sin(theta)
+        if abs(ball_y) >= min_y_clear:
+            return ball_x, ball_y
+    max_x = math.sqrt(max(0.0, spawn_radius * spawn_radius - min_y_clear * min_y_clear))
+    ball_x = float(rng.random()) * max_x
+    ball_y = min_y_clear if float(rng.random()) < 0.5 else -min_y_clear
+    return ball_x, ball_y
 
 
 @dataclass
@@ -101,6 +131,8 @@ class ForceController:
 def build_mjcf() -> str:
     if trimesh is None:
         raise SystemExit("ERROR: trimesh is not installed. Install with: pip install trimesh")
+
+    global BALL_SPAWN_RADIUS, BALL_MIN_Y_CLEAR, BALL_BASE_X, BALL_BASE_Y
 
     base_dir = Path(__file__).resolve().parent
     stl_dir = base_dir / "assets" / "spiral_tent_stls_vir"
@@ -164,6 +196,16 @@ def build_mjcf() -> str:
 
     meshdir = stl_dir.as_posix()
 
+    rng = np.random.default_rng()
+    spawn_radius = scaled_length * 0.8
+    min_y_clear = 0.5 * max(base_width, tip_width) + BALL_RADIUS + BALL_CLEARANCE_Y
+    ball_x, ball_y = _sample_ball_xy(spawn_radius, min_y_clear, rng)
+    ball_z = BASE_Z_OFFSET
+    BALL_SPAWN_RADIUS = spawn_radius
+    BALL_MIN_Y_CLEAR = min_y_clear
+    BALL_BASE_X = ball_x
+    BALL_BASE_Y = ball_y
+
     mesh_lines = []
     for i in range(N_SEGMENTS):
         mesh_lines.append(
@@ -192,7 +234,7 @@ def build_mjcf() -> str:
         site_pos_r = f"{_fmt(site_x)} {_fmt(-y_site)} 0"
 
         if i == 0:
-            body_pos = "0 0 0"
+            body_pos = f"0 0 {_fmt(BASE_Z_OFFSET)}"
         else:
             prev_xlen = seg_info[i - 1]["xspan_eff"] * scale_factor
             pitch = prev_xlen + CLEARANCE_X
@@ -289,6 +331,14 @@ def build_mjcf() -> str:
     <geom name=\"floor\" type=\"plane\" pos=\"0 0 -0.05\" size=\"1 1 0.1\"
           friction=\"{FRICTION}\" solimp=\"{SOLIMP}\" solref=\"{SOLREF}\"
           contype=\"1\" conaffinity=\"1\" condim=\"3\" rgba=\"0.2 0.2 0.2 1\"/>
+    <body name=\"ball\" pos=\"{_fmt(ball_x)} {_fmt(ball_y)} {_fmt(ball_z)}\">
+      <joint name=\"ball_slide_x\" type=\"slide\" axis=\"1 0 0\"/>
+      <joint name=\"ball_slide_y\" type=\"slide\" axis=\"0 1 0\"/>
+      <joint name=\"ball_rot\" type=\"ball\"/>
+      <geom name=\"ball_geom\" type=\"sphere\" size=\"{_fmt(BALL_RADIUS)}\" density=\"{_fmt(BALL_DENSITY)}\"
+            friction=\"{BALL_FRICTION}\" solimp=\"{SOLIMP}\" solref=\"{SOLREF}\"
+            contype=\"1\" conaffinity=\"1\" condim=\"3\" rgba=\"0.9 0.2 0.2 1\"/>
+    </body>
 
 {chr(10).join(body_lines)}
   </worldbody>
@@ -470,13 +520,47 @@ def main() -> None:
             raise RuntimeError("Missing joint id")
         joint_qposadrs.append(int(model.jnt_qposadr[jid]))
 
+    ball_x_jid = _find_id(model, mujoco.mjtObj.mjOBJ_JOINT, "ball_slide_x")
+    ball_y_jid = _find_id(model, mujoco.mjtObj.mjOBJ_JOINT, "ball_slide_y")
+    if ball_x_jid < 0 or ball_y_jid < 0:
+        raise RuntimeError("Missing ball slide joint id")
+    ball_x_qadr = int(model.jnt_qposadr[ball_x_jid])
+    ball_y_qadr = int(model.jnt_qposadr[ball_y_jid])
+
     ctrl = ForceController()
     ctrl.T_left_seg = [0.0] * (N_SEGMENTS - 1)
     ctrl.T_right_seg = [0.0] * (N_SEGMENTS - 1)
     ctrl.T_left_prev = ctrl.T_left
     ctrl.T_right_prev = ctrl.T_right
 
+    reset_requested = False
+
+    def _reset_sim() -> None:
+        mujoco.mj_resetData(model, data)
+        rng = np.random.default_rng()
+        ball_x, ball_y = _sample_ball_xy(BALL_SPAWN_RADIUS, BALL_MIN_Y_CLEAR, rng)
+        data.qpos[ball_x_qadr] = ball_x - BALL_BASE_X
+        data.qpos[ball_y_qadr] = ball_y - BALL_BASE_Y
+        mujoco.mj_forward(model, data)
+        ctrl.demo_active = False
+        ctrl.demo_stage = 0
+        ctrl.demo_t0 = time.time()
+        ctrl.demo_L0 = 0.0
+        ctrl.demo_R0 = 0.0
+        ctrl.demo_uR = 0.0
+        ctrl.demo_uL = 0.0
+        ctrl.T_left = 0.0
+        ctrl.T_right = 0.0
+        ctrl.T_left_target = 0.0
+        ctrl.T_right_target = 0.0
+        ctrl.T_left_seg = [0.0] * (N_SEGMENTS - 1)
+        ctrl.T_right_seg = [0.0] * (N_SEGMENTS - 1)
+        ctrl.T_left_prev = 0.0
+        ctrl.T_right_prev = 0.0
+        data.ctrl[:] = 0.0
+
     def on_press(key) -> None:
+        nonlocal reset_requested
         try:
             k = key.char
         except AttributeError:
@@ -497,6 +581,8 @@ def main() -> None:
 
         if k in ("q", "й"):
             ctrl.running = False
+        elif k in ("r", "к"):
+            reset_requested = True
         elif k in ("a", "ф"):
             ctrl.demo_active = False
             ctrl.T_left = _clip(ctrl.T_left + ctrl.T_step, 0.0, ctrl.Tmax)
@@ -560,6 +646,11 @@ def main() -> None:
             tnow = time.time()
             dt_real = _clip(tnow - t_prev, 1e-6, 0.05)
             t_prev = tnow
+
+            if reset_requested:
+                _reset_sim()
+                reset_requested = False
+                continue
 
             if ctrl.demo_active:
                 prev_stage = ctrl.demo_stage
