@@ -419,6 +419,42 @@ def _alpha_tensions(T0: float, alpha: float) -> list[float]:
     return [float(T0) * math.pow(alpha, i) for i in range(N_SEGMENTS - 1)]
 
 
+def compute_segment_tensions(
+    ctrl: ForceController,
+    q: list[float],
+    dt_real: float,
+) -> tuple[list[float], list[float]]:
+    """
+    Deterministic mapping from (TcmdL, TcmdR) to per-segment tensions.
+    This is the only place that creates Tseg arrays.
+    """
+    dt = max(dt_real, 1e-6)
+    dL_rate = abs(ctrl.T_left - ctrl.T_left_prev) / dt
+    dR_rate = abs(ctrl.T_right - ctrl.T_right_prev) / dt
+    uL = _clip((dL_rate - DTRATE_LO) / (DTRATE_HI - DTRATE_LO), 0.0, 1.0)
+    uR = _clip((dR_rate - DTRATE_LO) / (DTRATE_HI - DTRATE_LO), 0.0, 1.0)
+    muL = _lerp(MU_STATIC, MU_KINETIC, uL)
+    muR = _lerp(MU_STATIC, MU_KINETIC, uR)
+
+    ctrl.T_left_seg = _capstan_hysteresis(ctrl.T_left, q, ctrl.T_left_seg, muL)
+    ctrl.T_right_seg = _capstan_hysteresis(ctrl.T_right, q, ctrl.T_right_seg, muR)
+
+    return ctrl.T_left_seg, ctrl.T_right_seg
+
+
+def apply_segment_tensions_to_motors(
+    data: mujoco.MjData,
+    motor_left_ids: list[int],
+    motor_right_ids: list[int],
+    t_left: list[float],
+    t_right: list[float],
+) -> None:
+    for i, act_id in enumerate(motor_left_ids):
+        data.ctrl[act_id] = _clip(t_left[i] / GEAR, 0.0, 1.0)
+    for i, act_id in enumerate(motor_right_ids):
+        data.ctrl[act_id] = _clip(t_right[i] / GEAR, 0.0, 1.0)
+
+
 def _update_demo(ctrl: ForceController, tnow: float) -> None:
     if not ctrl.demo_active:
         return
@@ -625,10 +661,6 @@ def main() -> None:
             ctrl.demo_t0 = time.time()
             ctrl.demo_L0 = float(ctrl.T_left)
             ctrl.demo_R0 = float(ctrl.T_right)
-        elif k in (",", "б"):
-            ctrl.alpha = _clip(ctrl.alpha - ALPHA_STEP, ALPHA_MIN, ALPHA_MAX)
-        elif k in (".", "ю"):
-            ctrl.alpha = _clip(ctrl.alpha + ALPHA_STEP, ALPHA_MIN, ALPHA_MAX)
 
     listener = keyboard.Listener(on_press=on_press)
     listener.start()
@@ -669,22 +701,8 @@ def main() -> None:
                 ctrl.T_left_target = ctrl.T_left
                 ctrl.T_right_target = ctrl.T_right
 
-            use_capstan = ctrl.demo_active or not USE_CAPSTAN_DEMO_ONLY
-            if use_capstan:
-                q = [float(data.qpos[adr]) for adr in joint_qposadrs]
-                dL_rate = abs(ctrl.T_left - ctrl.T_left_prev) / dt_real
-                dR_rate = abs(ctrl.T_right - ctrl.T_right_prev) / dt_real
-                uL = _clip((dL_rate - DTRATE_LO) / (DTRATE_HI - DTRATE_LO), 0.0, 1.0)
-                uR = _clip((dR_rate - DTRATE_LO) / (DTRATE_HI - DTRATE_LO), 0.0, 1.0)
-                muL = _lerp(MU_STATIC, MU_KINETIC, uL)
-                muR = _lerp(MU_STATIC, MU_KINETIC, uR)
-                ctrl.T_left_seg = _capstan_hysteresis(ctrl.T_left, q, ctrl.T_left_seg, muL)
-                ctrl.T_right_seg = _capstan_hysteresis(ctrl.T_right, q, ctrl.T_right_seg, muR)
-                t_left = ctrl.T_left_seg
-                t_right = ctrl.T_right_seg
-            else:
-                t_left = _alpha_tensions(ctrl.T_left, ctrl.alpha)
-                t_right = _alpha_tensions(ctrl.T_right, ctrl.alpha)
+            q = [float(data.qpos[adr]) for adr in joint_qposadrs]
+            t_left, t_right = compute_segment_tensions(ctrl, q, dt_real)
             q01 = float(data.qpos[joint_qposadrs[0]])
             q05 = float(data.qpos[joint_qposadrs[4]])
             q18 = float(data.qpos[joint_qposadrs[17]])
@@ -697,12 +715,13 @@ def main() -> None:
             ctrlN_l = _clip(tsegN_l / GEAR, 0.0, 1.0)
             ctrlN_r = _clip(tsegN_r / GEAR, 0.0, 1.0)
 
-            for i, act_id in enumerate(motor_left_ids):
-                tseg = t_left[i]
-                data.ctrl[act_id] = _clip(tseg / GEAR, 0.0, 1.0)
-            for i, act_id in enumerate(motor_right_ids):
-                tseg = t_right[i]
-                data.ctrl[act_id] = _clip(tseg / GEAR, 0.0, 1.0)
+            apply_segment_tensions_to_motors(
+                data,
+                motor_left_ids,
+                motor_right_ids,
+                t_left,
+                t_right,
+            )
 
             ctrl.T_left_prev = ctrl.T_left
             ctrl.T_right_prev = ctrl.T_right
