@@ -255,14 +255,15 @@ def build_mjcf() -> str:
                 f"damping=\"{_fmt(damp)}\" frictionloss=\"{_fmt(fric)}\"/>"
             )
 
-        if i <= 2:
-            fric_slide = 0.08
-            fric_tors = 0.0003
-            fric_roll = 0.0
-        else:
-            fric_slide = 1.6
-            fric_tors = 0.015
-            fric_roll = 0.00005
+        #if i <= 2:
+        #    fric_slide = 0.08
+        #    fric_tors = 0.0003
+        #    fric_roll = 0.0
+        #else:
+        fric_slide = 1.6
+        fric_tors = 0.015
+        fric_roll = 0.00005
+        #
         friction_i = f"{_fmt(fric_slide)} {_fmt(fric_tors)} {_fmt(fric_roll)}"
         condim_i = 3 if i <= 2 else 6
 
