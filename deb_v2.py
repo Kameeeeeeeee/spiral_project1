@@ -229,6 +229,9 @@ def build_mjcf() -> str:
         site_x = max(SITE_X_MIN, SITE_X_FRAC * x_hinge_span)
         y_site = 0.5 * yspan - 0.002
         y_site = max(y_site, 0.0022)
+        if i in (0, 1):
+            site_x = max(site_x, 0.45 * x_hinge_span)
+            y_site = max(y_site, 0.0045)
 
         site_pos_l = f"{_fmt(site_x)} {_fmt(y_site)} 0"
         site_pos_r = f"{_fmt(site_x)} {_fmt(-y_site)} 0"
@@ -247,6 +250,8 @@ def build_mjcf() -> str:
             damp = 0.006 + 0.014 * (s ** 2)
             stiff = SPRING_STIFFNESS * (1.6 - 0.9 * s)
             stiff = max(0.001, stiff)
+            if i == 1:
+                stiff *= 0.45
             body_lines.append(
                 f"{indent * (i + 1)}<joint name=\"joint_{i:02d}\" type=\"hinge\" "
                 f"axis=\"0 0 1\" limited=\"true\" range=\"-0.52 0.52\" "
