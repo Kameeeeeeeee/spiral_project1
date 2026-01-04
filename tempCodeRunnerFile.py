@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import mujoco
@@ -15,23 +15,17 @@ from pynput import keyboard
 
 N_SEGMENTS = 19
 TARGET_LENGTH_M = 0.20
-GEAR = 200.0
+GEAR = 100.0
 ALPHA_DEFAULT = 0.992
 ALPHA_STEP = 0.002
 ALPHA_MIN = 0.9
 ALPHA_MAX = 0.9995
 
 T_STEP_DEFAULT = 5
-T_MAX = 140.0
-CABLE_MU = 0.16
-CABLE_BIAS = 0.005
+T_MAX = 100.0
+CABLE_MU = 0.18
+CABLE_BIAS = 0.006
 USE_CAPSTAN_DEMO_ONLY = True
-CABLE_MU_FAST = 0.08
-CABLE_BIAS_FAST = 0.002
-RATE_FAST = 300.0
-RATE_FULL = 2000.0
-RATE_DECAY_T = 0.15
-RATE_TENSION_BOOST = 1.0
 
 TIMESTEP = 0.0005
 
@@ -40,26 +34,28 @@ SOLIMP = "0.998 0.998 0.0002"
 SOLREF = "0.003 1.0"
 MARGIN = 0.00025
 GAP = 0.0000
-DENSITY = 700.0
+DENSITY = 10000.0
 GEOM_EULER = "0 0 0"
 CLEARANCE_X = 0.0006
 SPRING_STIFFNESS = 0.06
 SITE_X_FRAC = 0.15
 SITE_X_MIN = 0.0006
 PIVOT_X = 0.0010
-TIP_HOLD_START = 0.7
-TIP_FRICTION_BOOST = 0.0035
-TIP_DAMPING_BOOST = 0.012
-JOINT_ARMATURE = 0.015
-DEMO_L_CURL = 90.0
+DEMO_L_CURL = 95.0
 DEMO_R_CURL = 0.0
-DEMO_L_END = 40.0
-DEMO_R_END = 90.0
-DEMO_T_RAMP = 1.2
-DEMO_T_SETTLE = 0.6
-DEMO_T_CROSS = 4.0
+DEMO_L_END = 0.0
+DEMO_R_END = 95.0
+DEMO_T_RAMP = 0.0
+DEMO_T_SETTLE = 0.3
+DEMO_T_CROSS = 32.0
 DEMO_T_HOLD = 1.0
-DT_SLEW = 220.0
+DT_SLEW_RAMP = 800.0
+DT_SLEW_CROSS = 3.0
+
+MU_STATIC = 0.22
+MU_KINETIC = 0.04
+DTRATE_LO = 30.0
+DTRATE_HI = 250.0
 
 
 def _fmt(x: float) -> str:
@@ -96,7 +92,10 @@ class ForceController:
     demo_R0: float = 0.0
     demo_uR: float = 0.0
     demo_uL: float = 0.0
-    rate_boost: float = 0.0
+    T_left_seg: list[float] = field(default_factory=list)
+    T_right_seg: list[float] = field(default_factory=list)
+    T_left_prev: float = 0.0
+    T_right_prev: float = 0.0
 
 
 def build_mjcf() -> str:
@@ -185,12 +184,9 @@ def build_mjcf() -> str:
 
         xlen_s = info["xspan_eff"] * scale_factor
         x_hinge_span = max(1e-6, xlen_s - 2.0 * PIVOT_X)
-        s = i / (N_SEGMENTS - 1)
-        site_x_frac = 0.26 + 0.38 * (s ** 1.7)
-        site_x = max(SITE_X_MIN, site_x_frac * x_hinge_span)
-        y_site = (0.47 + 0.07 * (s ** 1.2)) * yspan
-        y_site = min(y_site, 0.497 * yspan)
-        y_site = max(y_site, 0.0008)
+        site_x = max(SITE_X_MIN, SITE_X_FRAC * x_hinge_span)
+        y_site = 0.5 * yspan - 0.002
+        y_site = max(y_site, 0.0022)
 
         site_pos_l = f"{_fmt(site_x)} {_fmt(y_site)} 0"
         site_pos_r = f"{_fmt(site_x)} {_fmt(-y_site)} 0"
@@ -205,27 +201,36 @@ def build_mjcf() -> str:
         body_lines.append(f"{indent * i}<body name=\"seg_{i:02d}\" pos=\"{body_pos}\">")
         if i > 0:
             s = i / (N_SEGMENTS - 1)
-            shape = (s ** 2) * (1.0 - 0.75 * s)
-            tip = max(0.0, (s - TIP_HOLD_START) / (1.0 - TIP_HOLD_START))
-            tip = tip * tip
-            fric = 0.0012 + 0.005 * shape + TIP_FRICTION_BOOST * tip
-            damp = 0.003 + 0.010 * shape + TIP_DAMPING_BOOST * tip
+            fric = 0.002 + 0.006 * (s ** 2)
+            damp = 0.006 + 0.014 * (s ** 2)
+            stiff = SPRING_STIFFNESS * (1.6 - 0.9 * s)
+            stiff = max(0.001, stiff)
             body_lines.append(
                 f"{indent * (i + 1)}<joint name=\"joint_{i:02d}\" type=\"hinge\" "
                 f"axis=\"0 0 1\" limited=\"true\" range=\"-0.52 0.52\" "
                 f"solreflimit=\"0.0005 1\" solimplimit=\"0.95 0.99 0.001\" "
-                f"stiffness=\"{_fmt(SPRING_STIFFNESS)}\" springref=\"0\" "
-                f"damping=\"{_fmt(damp)}\" frictionloss=\"{_fmt(fric)}\" "
-                f"armature=\"{_fmt(JOINT_ARMATURE)}\"/>"
+                f"stiffness=\"{_fmt(stiff)}\" springref=\"0\" "
+                f"damping=\"{_fmt(damp)}\" frictionloss=\"{_fmt(fric)}\"/>"
             )
+
+        if i <= 2:
+            fric_slide = 0.08
+            fric_tors = 0.0003
+            fric_roll = 0.0
+        else:
+            fric_slide = 1.6
+            fric_tors = 0.015
+            fric_roll = 0.00005
+        friction_i = f"{_fmt(fric_slide)} {_fmt(fric_tors)} {_fmt(fric_roll)}"
+        condim_i = 3 if i <= 2 else 6
 
         body_lines.append(
             f"{indent * (i + 1)}<geom name=\"geom_{i:02d}\" type=\"mesh\" "
             f"mesh=\"mesh_{i:02d}\" pos=\"{_fmt(geom_pos[0])} {_fmt(geom_pos[1])} {_fmt(geom_pos[2])}\" "
             f"euler=\"{GEOM_EULER}\" "
             f"density=\"{_fmt(DENSITY)}\" rgba=\"0.85 0.86 0.9 1\" "
-            f"condim=\"6\" contype=\"1\" conaffinity=\"1\" "
-            f"friction=\"{FRICTION}\" solimp=\"{SOLIMP}\" solref=\"{SOLREF}\" "
+            f"condim=\"{condim_i}\" contype=\"1\" conaffinity=\"1\" "
+            f"friction=\"{friction_i}\" solimp=\"{SOLIMP}\" solref=\"{SOLREF}\" "
             f"margin=\"{_fmt(MARGIN)}\" gap=\"{_fmt(GAP)}\"/>"
         )
         body_lines.append(f"{indent * (i + 1)}<site name=\"site_L_{i:02d}\" pos=\"{site_pos_l}\"/>")
@@ -258,10 +263,18 @@ def build_mjcf() -> str:
             f"ctrlrange=\"0 1\" ctrllimited=\"true\" gear=\"{_fmt(GEAR)}\"/>"
         )
 
+    exclude_lines = []
+    for i in range(N_SEGMENTS - 1):
+        exclude_lines.append(f"  <exclude body1=\"seg_{i:02d}\" body2=\"seg_{i+1:02d}\"/>")
+    exclude_block = "\n".join(exclude_lines)
+
     xml = f"""<mujoco model=\"spiral_tentacle_stl\">
   <compiler angle=\"radian\" coordinate=\"local\" inertiafromgeom=\"true\" meshdir=\"{meshdir}\"/>
   <option timestep=\"{_fmt(TIMESTEP)}\" gravity=\"0 0 -9.81\" integrator=\"implicitfast\" iterations=\"800\" ls_iterations=\"300\"/>
   <size njmax=\"20000\" nconmax=\"20000\"/>
+  <contact>
+{exclude_block}
+  </contact>
 
   <default>
     <site size=\"0.001\" rgba=\"0.95 0.2 0.2 0.8\"/>
@@ -309,16 +322,46 @@ def _tendon_force(data: mujoco.MjData, tendon_id: int, actuator_id: int) -> floa
     return float("nan")
 
 
-def _cable_tensions(
-    T0: float, q: list[float], side_sign: float, curl_sign: float, mu: float, bias: float
-) -> list[float]:
+def _cable_tensions(T0: float, q: list[float]) -> list[float]:
     T = float(T0)
     out = []
     for qi in q:
         out.append(T)
-        wrap = max(0.0, side_sign * curl_sign * qi)
-        att = math.exp(-(bias + mu * wrap))
+        att = math.exp(-(CABLE_BIAS + CABLE_MU * abs(qi)))
         T *= att
+    return out
+
+
+def _capstan_hysteresis(
+    T0: float,
+    q: list[float],
+    T_prev: list[float],
+    mu_eff: float,
+) -> list[float]:
+    """
+    Stateful capstan propagation with a static-friction band.
+    Segment 0 is directly driven; capstan starts from segment 1.
+    """
+    n = N_SEGMENTS - 1
+    if not T_prev or len(T_prev) != n:
+        T_prev = [0.0] * n
+
+    out = [0.0] * n
+    out[0] = float(T0)
+    T_in = out[0]
+
+    for i in range(1, n):
+        theta = abs(float(q[i - 1]))
+        cap = math.exp(CABLE_BIAS + mu_eff * theta)
+
+        lo = T_in / cap
+        hi = T_in * cap
+
+        T_out = _clip(T_prev[i], lo, hi)
+
+        out[i] = T_out
+        T_in = T_out
+
     return out
 
 
@@ -333,6 +376,14 @@ def _update_demo(ctrl: ForceController, tnow: float) -> None:
     t = tnow - ctrl.demo_t0
 
     if ctrl.demo_stage == 0:
+        if DEMO_T_RAMP <= 0.0:
+            ctrl.T_left_target = DEMO_L_CURL
+            ctrl.T_right_target = DEMO_R_CURL
+            ctrl.demo_uR = 0.0
+            ctrl.demo_uL = 0.0
+            ctrl.demo_stage = 1
+            ctrl.demo_t0 = tnow
+            return
         u = _smoothstep(t / DEMO_T_RAMP)
         ctrl.T_left_target = _lerp(ctrl.demo_L0, DEMO_L_CURL, u)
         ctrl.T_right_target = _lerp(ctrl.demo_R0, DEMO_R_CURL, u)
@@ -352,21 +403,21 @@ def _update_demo(ctrl: ForceController, tnow: float) -> None:
         return
 
     if ctrl.demo_stage == 2:
-        uR = _smoothstep(t / DEMO_T_CROSS)
-        tL = max(0.0, t - 0.60 * DEMO_T_CROSS)
-        uL = _smoothstep(tL / max(1e-6, 0.40 * DEMO_T_CROSS))
-        ctrl.demo_uR = uR
-        ctrl.demo_uL = uL
-        ctrl.T_right_target = _lerp(DEMO_R_CURL, DEMO_R_END, uR)
-        ctrl.T_left_target = _lerp(DEMO_L_CURL, DEMO_L_END, uL)
+        u = _smoothstep(t / DEMO_T_CROSS)
+        ctrl.demo_uR = u
+        ctrl.demo_uL = u
+        T_total = DEMO_L_CURL + DEMO_R_CURL
+        ctrl.T_right_target = _clip(_lerp(DEMO_R_CURL, DEMO_R_END, u), 0.0, T_total)
+        ctrl.T_left_target = T_total - ctrl.T_right_target
         if t >= DEMO_T_CROSS:
             ctrl.demo_stage = 3
             ctrl.demo_t0 = tnow
         return
 
     if ctrl.demo_stage == 3:
-        ctrl.T_left_target = DEMO_L_END
-        ctrl.T_right_target = DEMO_R_END
+        T_total = DEMO_L_CURL + DEMO_R_CURL
+        ctrl.T_right_target = _clip(DEMO_R_END, 0.0, T_total)
+        ctrl.T_left_target = T_total - ctrl.T_right_target
         if t >= DEMO_T_HOLD:
             ctrl.demo_active = False
         return
@@ -420,6 +471,10 @@ def main() -> None:
         joint_qposadrs.append(int(model.jnt_qposadr[jid]))
 
     ctrl = ForceController()
+    ctrl.T_left_seg = [0.0] * (N_SEGMENTS - 1)
+    ctrl.T_right_seg = [0.0] * (N_SEGMENTS - 1)
+    ctrl.T_left_prev = ctrl.T_left
+    ctrl.T_right_prev = ctrl.T_right
 
     def on_press(key) -> None:
         try:
@@ -494,8 +549,7 @@ def main() -> None:
 
     t_last = time.time()
     print_dt = 0.1
-    prev_T_left = ctrl.T_left
-    prev_T_right = ctrl.T_right
+    t_prev = time.time()
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = 0
@@ -503,42 +557,46 @@ def main() -> None:
 
         while viewer.is_running() and ctrl.running:
             step_start = time.time()
+            tnow = time.time()
+            dt_real = _clip(tnow - t_prev, 1e-6, 0.05)
+            t_prev = tnow
 
-            dt = model.opt.timestep
             if ctrl.demo_active:
-                tnow = time.time()
+                prev_stage = ctrl.demo_stage
                 _update_demo(ctrl, tnow)
-                max_dT = DT_SLEW * dt
-                dL = _clip(ctrl.T_left_target - ctrl.T_left, -max_dT, max_dT)
-                dR = _clip(ctrl.T_right_target - ctrl.T_right, -max_dT, max_dT)
-                ctrl.T_left = _clip(ctrl.T_left + dL, 0.0, ctrl.Tmax)
-                ctrl.T_right = _clip(ctrl.T_right + dR, 0.0, ctrl.Tmax)
+                if prev_stage == 0 and ctrl.demo_stage != 0:
+                    ctrl.T_left = _clip(ctrl.T_left_target, 0.0, ctrl.Tmax)
+                    ctrl.T_right = _clip(ctrl.T_right_target, 0.0, ctrl.Tmax)
+                else:
+                    slew = DT_SLEW_RAMP if ctrl.demo_stage in (0, 1) else DT_SLEW_CROSS
+                    max_dT = slew * dt_real
+                    dL = _clip(ctrl.T_left_target - ctrl.T_left, -max_dT, max_dT)
+                    dR = _clip(ctrl.T_right_target - ctrl.T_right, -max_dT, max_dT)
+                    ctrl.T_left = _clip(ctrl.T_left + dL, 0.0, ctrl.Tmax)
+                    ctrl.T_right = _clip(ctrl.T_right + dR, 0.0, ctrl.Tmax)
             else:
                 ctrl.T_left_target = ctrl.T_left
                 ctrl.T_right_target = ctrl.T_right
 
-            rate = max(abs(ctrl.T_left - prev_T_left), abs(ctrl.T_right - prev_T_right)) / max(dt, 1e-6)
-            burst = _clip((rate - RATE_FAST) / max(1e-6, RATE_FULL - RATE_FAST), 0.0, 1.0)
-            decay = math.exp(-dt / max(1e-6, RATE_DECAY_T))
-            ctrl.rate_boost = max(burst, ctrl.rate_boost * decay)
-            boost = ctrl.rate_boost
-            prev_T_left = ctrl.T_left
-            prev_T_right = ctrl.T_right
-
-            T_left_eff = ctrl.T_left * (1.0 + RATE_TENSION_BOOST * boost)
-            T_right_eff = ctrl.T_right * (1.0 + RATE_TENSION_BOOST * boost)
-
-            q = [float(data.qpos[adr]) for adr in joint_qposadrs]
-            curl_sign = 1.0 if sum(q) >= 0.0 else -1.0
             use_capstan = ctrl.demo_active or not USE_CAPSTAN_DEMO_ONLY
             if use_capstan:
-                mu_eff = _lerp(CABLE_MU, CABLE_MU_FAST, boost)
-                bias_eff = _lerp(CABLE_BIAS, CABLE_BIAS_FAST, boost)
-                t_left = _cable_tensions(T_left_eff, q, 1.0, curl_sign, mu_eff, bias_eff)
-                t_right = _cable_tensions(T_right_eff, q, -1.0, curl_sign, mu_eff, bias_eff)
+                q = [float(data.qpos[adr]) for adr in joint_qposadrs]
+                dL_rate = abs(ctrl.T_left - ctrl.T_left_prev) / dt_real
+                dR_rate = abs(ctrl.T_right - ctrl.T_right_prev) / dt_real
+                uL = _clip((dL_rate - DTRATE_LO) / (DTRATE_HI - DTRATE_LO), 0.0, 1.0)
+                uR = _clip((dR_rate - DTRATE_LO) / (DTRATE_HI - DTRATE_LO), 0.0, 1.0)
+                muL = _lerp(MU_STATIC, MU_KINETIC, uL)
+                muR = _lerp(MU_STATIC, MU_KINETIC, uR)
+                ctrl.T_left_seg = _capstan_hysteresis(ctrl.T_left, q, ctrl.T_left_seg, muL)
+                ctrl.T_right_seg = _capstan_hysteresis(ctrl.T_right, q, ctrl.T_right_seg, muR)
+                t_left = ctrl.T_left_seg
+                t_right = ctrl.T_right_seg
             else:
-                t_left = _alpha_tensions(T_left_eff, ctrl.alpha)
-                t_right = _alpha_tensions(T_right_eff, ctrl.alpha)
+                t_left = _alpha_tensions(ctrl.T_left, ctrl.alpha)
+                t_right = _alpha_tensions(ctrl.T_right, ctrl.alpha)
+            q01 = float(data.qpos[joint_qposadrs[0]])
+            q05 = float(data.qpos[joint_qposadrs[4]])
+            q18 = float(data.qpos[joint_qposadrs[17]])
             tseg0_l = t_left[0] if t_left else 0.0
             tseg0_r = t_right[0] if t_right else 0.0
             tsegN_l = t_left[-1] if t_left else 0.0
@@ -547,8 +605,6 @@ def main() -> None:
             ctrl0_r = _clip(tseg0_r / GEAR, 0.0, 1.0)
             ctrlN_l = _clip(tsegN_l / GEAR, 0.0, 1.0)
             ctrlN_r = _clip(tsegN_r / GEAR, 0.0, 1.0)
-            tr_ratio = (tsegN_r / tseg0_r) if tseg0_r > 1e-6 else 0.0
-            q_end = abs(q[-1]) if q else 0.0
 
             for i, act_id in enumerate(motor_left_ids):
                 tseg = t_left[i]
@@ -556,6 +612,9 @@ def main() -> None:
             for i, act_id in enumerate(motor_right_ids):
                 tseg = t_right[i]
                 data.ctrl[act_id] = _clip(tseg / GEAR, 0.0, 1.0)
+
+            ctrl.T_left_prev = ctrl.T_left
+            ctrl.T_right_prev = ctrl.T_right
 
             mujoco.mj_step(model, data)
 
@@ -575,10 +634,9 @@ def main() -> None:
                     f"ctrl0(L,R)=({ctrl0_l:.3f},{ctrl0_r:.3f}) | "
                     f"ctrlN(L,R)=({ctrlN_l:.3f},{ctrlN_r:.3f}) | "
                     f"tenF(L0,LN,R0,RN)=({ten_l0:6.1f},{ten_ln:6.1f},{ten_r0:6.1f},{ten_rn:6.1f}) | "
+                    f"q01={q01:+.4f} q05={q05:+.4f} q18={q18:+.4f} | "
                     f"T_step={ctrl.T_step:.2f} | stage={ctrl.demo_stage} "
-                    f"uR={ctrl.demo_uR:.2f} uL={ctrl.demo_uL:.2f} | "
-                    f"TrN/Tr0={tr_ratio:.2f} | |qN|={q_end:.3f} | "
-                    f"boost={boost:.2f}"
+                    f"uR={ctrl.demo_uR:.2f} uL={ctrl.demo_uL:.2f}"
                 )
 
             viewer.sync()
