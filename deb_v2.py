@@ -66,6 +66,47 @@ BALL_SPAWN_RADIUS = 0.0
 BALL_MIN_Y_CLEAR = 0.0
 BALL_BASE_X = 0.0
 BALL_BASE_Y = 0.0
+BALL_BASE_SEED = 0
+
+
+@dataclass
+class DomainRandCfg:
+    enabled: bool = True
+    seed: int = 123
+    log_on_reset: bool = True
+
+    seg_fric_slide: tuple[float, float] = (0.7, 1.4)
+    seg_fric_tors: tuple[float, float] = (0.7, 1.6)
+    seg_fric_roll: tuple[float, float] = (0.5, 2.0)
+
+    floor_fric_slide: tuple[float, float] = (0.7, 1.4)
+    floor_fric_tors: tuple[float, float] = (0.7, 1.6)
+    floor_fric_roll: tuple[float, float] = (0.5, 2.0)
+
+    ball_fric_slide: tuple[float, float] = (0.7, 1.4)
+    ball_fric_tors: tuple[float, float] = (0.7, 1.6)
+    ball_fric_roll: tuple[float, float] = (0.5, 2.0)
+
+    dof_damping: tuple[float, float] = (0.7, 1.5)
+    dof_frictionloss: tuple[float, float] = (0.7, 1.8)
+    dof_spring: tuple[float, float] = (0.8, 1.3)
+
+    mass_scale: tuple[float, float] = (0.8, 1.25)
+    per_link_mass_jitter: float = 0.06
+
+    mu_static: tuple[float, float] = (0.16, 0.30)
+    mu_kinetic: tuple[float, float] = (0.02, 0.08)
+    cable_bias: tuple[float, float] = (0.0, 0.02)
+
+
+def _u(rng: np.random.Generator, lo: float, hi: float) -> float:
+    return float(lo + (hi - lo) * rng.random())
+
+
+def _logu(rng: np.random.Generator, lo: float, hi: float) -> float:
+    lo = max(lo, 1e-9)
+    hi = max(hi, lo * 1.001)
+    return float(math.exp(_u(rng, math.log(lo), math.log(hi))))
 
 
 def _fmt(x: float) -> str:
@@ -126,6 +167,9 @@ class ForceController:
     T_right_seg: list[float] = field(default_factory=list)
     T_left_prev: float = 0.0
     T_right_prev: float = 0.0
+    mu_static: float = MU_STATIC
+    mu_kinetic: float = MU_KINETIC
+    cable_bias: float = CABLE_BIAS
 
 
 def build_mjcf() -> str:
@@ -196,7 +240,7 @@ def build_mjcf() -> str:
 
     meshdir = stl_dir.as_posix()
 
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(BALL_BASE_SEED)
     spawn_radius = scaled_length * 0.8
     min_y_clear = 0.5 * max(base_width, tip_width) + BALL_RADIUS + BALL_CLEARANCE_Y
     ball_x, ball_y = _sample_ball_xy(spawn_radius, min_y_clear, rng)
@@ -393,6 +437,7 @@ def _capstan_hysteresis(
     q: list[float],
     T_prev: list[float],
     mu_eff: float,
+    bias: float,
 ) -> list[float]:
     """
     Stateful capstan propagation with a static-friction band.
@@ -408,7 +453,7 @@ def _capstan_hysteresis(
 
     for i in range(1, n):
         theta = abs(float(q[i - 1]))
-        cap = math.exp(CABLE_BIAS + mu_eff * theta)
+        cap = math.exp(bias + mu_eff * theta)
 
         lo = T_in / cap
         hi = T_in * cap
@@ -439,11 +484,23 @@ def compute_segment_tensions(
     dR_rate = abs(ctrl.T_right - ctrl.T_right_prev) / dt
     uL = _clip((dL_rate - DTRATE_LO) / (DTRATE_HI - DTRATE_LO), 0.0, 1.0)
     uR = _clip((dR_rate - DTRATE_LO) / (DTRATE_HI - DTRATE_LO), 0.0, 1.0)
-    muL = _lerp(MU_STATIC, MU_KINETIC, uL)
-    muR = _lerp(MU_STATIC, MU_KINETIC, uR)
+    muL = _lerp(ctrl.mu_static, ctrl.mu_kinetic, uL)
+    muR = _lerp(ctrl.mu_static, ctrl.mu_kinetic, uR)
 
-    ctrl.T_left_seg = _capstan_hysteresis(ctrl.T_left, q, ctrl.T_left_seg, muL)
-    ctrl.T_right_seg = _capstan_hysteresis(ctrl.T_right, q, ctrl.T_right_seg, muR)
+    ctrl.T_left_seg = _capstan_hysteresis(
+        ctrl.T_left,
+        q,
+        ctrl.T_left_seg,
+        muL,
+        ctrl.cable_bias,
+    )
+    ctrl.T_right_seg = _capstan_hysteresis(
+        ctrl.T_right,
+        q,
+        ctrl.T_right_seg,
+        muR,
+        ctrl.cable_bias,
+    )
 
     return ctrl.T_left_seg, ctrl.T_right_seg
 
@@ -568,6 +625,123 @@ def main() -> None:
         raise RuntimeError("Missing ball slide joint id")
     ball_x_qadr = int(model.jnt_qposadr[ball_x_jid])
     ball_y_qadr = int(model.jnt_qposadr[ball_y_jid])
+    ball_bid = _find_id(model, mujoco.mjtObj.mjOBJ_BODY, "ball")
+
+    geom_seg_ids = []
+    for i in range(N_SEGMENTS):
+        gid = _find_id(model, mujoco.mjtObj.mjOBJ_GEOM, f"geom_{i:02d}")
+        if gid < 0:
+            raise RuntimeError("Missing geom id")
+        geom_seg_ids.append(gid)
+
+    floor_gid = _find_id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
+    ball_gid = _find_id(model, mujoco.mjtObj.mjOBJ_GEOM, "ball_geom")
+
+    dof_ids = []
+    joint_ids = []
+    for j in range(1, N_SEGMENTS):
+        jid = _find_id(model, mujoco.mjtObj.mjOBJ_JOINT, f"joint_{j:02d}")
+        if jid < 0:
+            raise RuntimeError("Missing joint id")
+        dof = int(model.jnt_dofadr[jid])
+        dof_ids.append(dof)
+        joint_ids.append(jid)
+
+    base_geom_friction = model.geom_friction.copy()
+    base_dof_damping = model.dof_damping.copy()
+    base_dof_frictionloss = model.dof_frictionloss.copy()
+    base_body_mass = model.body_mass.copy()
+    base_body_inertia = model.body_inertia.copy()
+    has_dof_spring = hasattr(model, "dof_spring")
+    has_jnt_stiffness = hasattr(model, "jnt_stiffness")
+    base_dof_spring = model.dof_spring.copy() if has_dof_spring else None
+    base_jnt_stiffness = model.jnt_stiffness.copy() if has_jnt_stiffness else None
+
+    dr_cfg = DomainRandCfg(enabled=True, seed=123)
+    dr_rng = np.random.default_rng(dr_cfg.seed)
+    spawn_rng = np.random.default_rng(dr_cfg.seed + 1)
+
+    def apply_domain_randomization(
+        model: mujoco.MjModel,
+        ctrl: ForceController,
+        rng: np.random.Generator,
+        cfg: DomainRandCfg,
+    ) -> None:
+        if not cfg.enabled:
+            return
+
+        for gid in geom_seg_ids:
+            f = base_geom_friction[gid].copy()
+            f[0] *= _logu(rng, *cfg.seg_fric_slide)
+            f[1] *= _logu(rng, *cfg.seg_fric_tors)
+            f[2] *= _logu(rng, *cfg.seg_fric_roll)
+            model.geom_friction[gid] = f
+
+        if floor_gid >= 0:
+            f = base_geom_friction[floor_gid].copy()
+            f[0] *= _logu(rng, *cfg.floor_fric_slide)
+            f[1] *= _logu(rng, *cfg.floor_fric_tors)
+            f[2] *= _logu(rng, *cfg.floor_fric_roll)
+            model.geom_friction[floor_gid] = f
+
+        if ball_gid >= 0:
+            f = base_geom_friction[ball_gid].copy()
+            f[0] *= _logu(rng, *cfg.ball_fric_slide)
+            f[1] *= _logu(rng, *cfg.ball_fric_tors)
+            f[2] *= _logu(rng, *cfg.ball_fric_roll)
+            model.geom_friction[ball_gid] = f
+
+        for dof in dof_ids:
+            model.dof_damping[dof] = base_dof_damping[dof] * _logu(
+                rng,
+                *cfg.dof_damping,
+            )
+            model.dof_frictionloss[dof] = base_dof_frictionloss[dof] * _logu(
+                rng,
+                *cfg.dof_frictionloss,
+            )
+
+        if has_jnt_stiffness or has_dof_spring:
+            for jid, dof in zip(joint_ids, dof_ids):
+                scale = _logu(rng, *cfg.dof_spring)
+                if has_jnt_stiffness:
+                    model.jnt_stiffness[jid] = base_jnt_stiffness[jid] * scale
+                if has_dof_spring:
+                    model.dof_spring[dof] = base_dof_spring[dof] * scale
+
+        mscale = _logu(rng, *cfg.mass_scale)
+        for b in range(model.nbody):
+            if b == 0 or b == ball_bid:
+                continue
+            jitter = 1.0 + _u(
+                rng,
+                -cfg.per_link_mass_jitter,
+                cfg.per_link_mass_jitter,
+            )
+            s = mscale * jitter
+            model.body_mass[b] = base_body_mass[b] * s
+            model.body_inertia[b] = base_body_inertia[b] * s
+
+        ctrl.mu_static = _u(rng, *cfg.mu_static)
+        ctrl.mu_kinetic = _u(rng, *cfg.mu_kinetic)
+        ctrl.cable_bias = _u(rng, *cfg.cable_bias)
+
+        if cfg.log_on_reset:
+            seg0_fric = model.geom_friction[geom_seg_ids[0]]
+            segN_fric = model.geom_friction[geom_seg_ids[-1]]
+            dof0 = dof_ids[0]
+            dofN = dof_ids[-1]
+            print(
+                "DR reset | "
+                f"mu_static={ctrl.mu_static:.4g} "
+                f"mu_kinetic={ctrl.mu_kinetic:.4g} "
+                f"cable_bias={ctrl.cable_bias:.4g} "
+                f"mscale={mscale:.4g} | "
+                f"seg0_fric=({seg0_fric[0]:.4g},{seg0_fric[1]:.4g},{seg0_fric[2]:.4g}) "
+                f"segN_fric=({segN_fric[0]:.4g},{segN_fric[1]:.4g},{segN_fric[2]:.4g}) | "
+                f"dof_fricloss0={model.dof_frictionloss[dof0]:.4g} "
+                f"dof_friclossN={model.dof_frictionloss[dofN]:.4g}"
+            )
 
     ctrl = ForceController()
     ctrl.T_left_seg = [0.0] * (N_SEGMENTS - 1)
@@ -579,8 +753,8 @@ def main() -> None:
 
     def _reset_sim() -> None:
         mujoco.mj_resetData(model, data)
-        rng = np.random.default_rng()
-        ball_x, ball_y = _sample_ball_xy(BALL_SPAWN_RADIUS, BALL_MIN_Y_CLEAR, rng)
+        apply_domain_randomization(model, ctrl, dr_rng, dr_cfg)
+        ball_x, ball_y = _sample_ball_xy(BALL_SPAWN_RADIUS, BALL_MIN_Y_CLEAR, spawn_rng)
         data.qpos[ball_x_qadr] = ball_x - BALL_BASE_X
         data.qpos[ball_y_qadr] = ball_y - BALL_BASE_Y
         mujoco.mj_forward(model, data)
@@ -670,6 +844,8 @@ def main() -> None:
 
     listener = keyboard.Listener(on_press=on_press)
     listener.start()
+
+    _reset_sim()
 
     t_last = time.time()
     print_dt = 0.1
