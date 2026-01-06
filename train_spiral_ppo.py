@@ -1,111 +1,96 @@
-# train_spiral_ppo.py
 from __future__ import annotations
 
-from typing import Any, Dict
+import torch
+
+from spiral_env import SpiralEnv, EnvCfg
 
 from stable_baselines3 import PPO
-from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv, VecNormalize
+from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
+from stable_baselines3.common.monitor import Monitor
 
-from spiral_env import DomainRandRanges, SpiralPickPlaceEnv
+
+# Edit these constants directly, no CLI.
+SEED = 0
+N_ENVS = 4
+TOTAL_TIMESTEPS = 500_000
+
+LOGDIR = "runs_spiral"
 
 
-def main():
-    dr = DomainRandRanges()
-    env_kwargs: Dict[str, Any] = dict(
-        render_mode=None,
-        n_segments=24,
-        total_length=0.45,
-        tip_width=0.0075,
-        tip_thickness=0.0024,
-        lift_z=0.010,
-        tendon_offset_frac=0.55,
-        k_tip=3.0,
-        damping_mul=1.2,
-        frictionloss_tip=0.012,
-        armature_mul=1.2,
-        m_tip=2e-6,
-        motor_gear=2600.0,
-        timestep=0.001,
-        cube_half=0.02,
-        cube_density=800.0,
-        cube_friction="1.1 0.02 0.0001",
-        max_episode_steps=900,
-        substeps=10,
-        arena_half=0.45,
-        cube_spawn_xy_jitter=0.06,
-        goal_a_xy=(0.18, 0.12),
-        goal_b_xy=(0.18, -0.12),
-        goal_z=0.02,
-        goal_radius=0.05,
-        success_hold_steps=30,
-        grasp_min_contacts=2,
-        grasp_v_cube_max=0.25,
-        grasp_rel_v_tip_max=0.25,
-        grasp_max_z=0.10,
-        l_max=0.18,
-        ell_rest_bias=0.0,
-        kp=200000.0,
-        kd=6000.0,
-        dr_ranges=dr,
-        dr_enable=True,
-        w_reach=1.6,
-        w_grasp=1.4,
-        w_transport=0.0,
-        w_place=0.0,
-        ctrl_energy_cost=0.0015,
-        action_smooth_cost=0.01,
-        grasp_v_scale=0.40,
-        grasp_t_scale=0.55,
-        grasp_filter_tau=0.12,
-        vspool_penalty_coef=0.05,
-        tension_penalty_coef=0.10,
-        v_fly_threshold=1.0,
-        z_fly_threshold=0.18,
-        fly_penalty=8.0,
-        r_contact=0.09,
-        alpha_success=0.50,
-        v_soft=0.22,
-        w_d_reach=1.0,
-        # FIX (1): ensure directional tip-velocity incentive is off (env keeps API but does not apply it)
-        w_v_reach=0.0,
-        w_prog_reach=0.05,
-        prog_clip=0.01,
-        w_cb=1.2,
-        w_c=0.10,
-        w_vc=0.45,
-        w_T=0.25,
-        w_L=0.12,
+def _make(rank: int):
+    def _thunk():
+        cfg = EnvCfg(seed=SEED + 1000 * rank, domain_randomization=True)
+        return Monitor(SpiralEnv(render_mode=None, cfg=cfg))
+    return _thunk
+
+
+if __name__ == "__main__":
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.set_float32_matmul_precision("high")
+    torch.set_num_threads(1)
+    torch.set_num_interop_threads(1)
+
+    if N_ENVS <= 1:
+        env = DummyVecEnv([_make(0)])
+    else:
+        env = SubprocVecEnv([_make(i) for i in range(N_ENVS)], start_method="spawn")
+
+    env = VecNormalize(env, norm_obs=True, norm_reward=True, clip_obs=10.0, clip_reward=10.0, gamma=0.99)
+
+    eval_env = DummyVecEnv([lambda: Monitor(SpiralEnv(render_mode=None, cfg=EnvCfg(seed=SEED + 9999, domain_randomization=True)))])
+    eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=False, clip_obs=10.0)
+    eval_env.training = False
+    eval_env.norm_reward = False
+
+    policy_kwargs = dict(
+        net_arch=dict(pi=[256, 256], vf=[256, 256]),
+        log_std_init=-0.2,
     )
-
-    num_envs = 6
-    env = make_vec_env(SpiralPickPlaceEnv, n_envs=num_envs, env_kwargs=env_kwargs)
 
     model = PPO(
         "MlpPolicy",
         env,
-        verbose=1,
-        n_steps=1024,
-        batch_size=256,
-        gamma=0.99,
+        device="cpu",
+        n_steps=2048,
+        batch_size=512,
+        n_epochs=10,
         gae_lambda=0.95,
+        gamma=0.99,
         learning_rate=3e-4,
-        ent_coef=0.005,
+        ent_coef=0.01,
         clip_range=0.2,
         vf_coef=0.5,
-        max_grad_norm=0.8,
-        tensorboard_log="./tensorboard_spiral_pull/",
-        policy_kwargs=dict(net_arch=[256, 256]),
+        max_grad_norm=0.5,
+        policy_kwargs=policy_kwargs,
+        use_sde=True,
+        sde_sample_freq=4,
+        verbose=1,
+        tensorboard_log=f"{LOGDIR}/tb",
+        seed=SEED,
+    )
+    print("SB3 device:", model.device)
+
+    ckpt_cb = CheckpointCallback(
+        save_freq=max(1, 200_000 // max(1, N_ENVS)),
+        save_path=f"{LOGDIR}/checkpoints",
+        name_prefix="ppo_spiral",
+        save_vecnormalize=True,
     )
 
-    total_timesteps = 240_000
-    model.learn(total_timesteps=total_timesteps)
+    eval_cb = EvalCallback(
+        eval_env,
+        best_model_save_path=f"{LOGDIR}/best",
+        log_path=f"{LOGDIR}/eval",
+        eval_freq=max(1, 50_000 // max(1, N_ENVS)),
+        deterministic=True,
+        render=False,
+        n_eval_episodes=10,
+    )
 
-    model_path = "ppo_spiral_pull"
-    model.save(model_path)
-    print(f"Saved model to {model_path}.zip")
+    model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=[ckpt_cb, eval_cb])
 
-    env.close()
-
-
-if __name__ == "__main__":
-    main()
+    model.save(f"{LOGDIR}/ppo_spiral_final")
+    env.save(f"{LOGDIR}/vecnormalize.pkl")
+    print("Saved:", f"{LOGDIR}/ppo_spiral_final.zip", f"{LOGDIR}/vecnormalize.pkl")

@@ -359,7 +359,7 @@ def build_mjcf() -> str:
     xml = f"""<mujoco model=\"spiral_tentacle_stl\">
   <compiler angle=\"radian\" coordinate=\"local\" inertiafromgeom=\"true\" meshdir=\"{meshdir}\"/>
   <option timestep=\"{_fmt(TIMESTEP)}\" gravity=\"0 0 -9.81\" integrator=\"implicitfast\" iterations=\"800\" ls_iterations=\"300\"/>
-  <size njmax=\"20000\" nconmax=\"20000\"/>
+  <size njmax=\"6000\" nconmax=\"6000\"/>
   <contact>
 {exclude_block}
   </contact>
