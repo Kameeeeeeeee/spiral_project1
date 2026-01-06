@@ -29,7 +29,7 @@ USE_CAPSTAN_DEMO_ONLY = True
 
 TIMESTEP = 0.0005
 
-FRICTION = "1.6 0.015 0.00005"
+FLOOR_FRICTION = "0 0 0"
 SOLIMP = "0.998 0.998 0.0002"
 SOLREF = "0.003 1.0"
 MARGIN = 0.00025
@@ -78,10 +78,6 @@ class DomainRandCfg:
     seg_fric_slide: tuple[float, float] = (0.7, 1.4)
     seg_fric_tors: tuple[float, float] = (0.7, 1.6)
     seg_fric_roll: tuple[float, float] = (0.5, 2.0)
-
-    floor_fric_slide: tuple[float, float] = (0.7, 1.4)
-    floor_fric_tors: tuple[float, float] = (0.7, 1.6)
-    floor_fric_roll: tuple[float, float] = (0.5, 2.0)
 
     ball_fric_slide: tuple[float, float] = (0.7, 1.4)
     ball_fric_tors: tuple[float, float] = (0.7, 1.6)
@@ -379,7 +375,7 @@ def build_mjcf() -> str:
   <worldbody>
     <light name=\"key\" pos=\"0.2 -0.3 0.4\" dir=\"-0.3 0.4 -0.8\" diffuse=\"0.7 0.7 0.7\"/>
     <geom name=\"floor\" type=\"plane\" pos=\"0 0 -0.05\" size=\"1 1 0.1\"
-          friction=\"{FRICTION}\" solimp=\"{SOLIMP}\" solref=\"{SOLREF}\"
+          friction=\"{FLOOR_FRICTION}\" solimp=\"{SOLIMP}\" solref=\"{SOLREF}\"
           contype=\"1\" conaffinity=\"1\" condim=\"3\" rgba=\"0.2 0.2 0.2 1\"/>
     <body name=\"ball\" pos=\"{_fmt(ball_x)} {_fmt(ball_y)} {_fmt(ball_z)}\">
       <joint name=\"ball_slide_x\" type=\"slide\" axis=\"1 0 0\"/>
@@ -634,7 +630,6 @@ def main() -> None:
             raise RuntimeError("Missing geom id")
         geom_seg_ids.append(gid)
 
-    floor_gid = _find_id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
     ball_gid = _find_id(model, mujoco.mjtObj.mjOBJ_GEOM, "ball_geom")
 
     dof_ids = []
@@ -676,13 +671,6 @@ def main() -> None:
             f[1] *= _logu(rng, *cfg.seg_fric_tors)
             f[2] *= _logu(rng, *cfg.seg_fric_roll)
             model.geom_friction[gid] = f
-
-        if floor_gid >= 0:
-            f = base_geom_friction[floor_gid].copy()
-            f[0] *= _logu(rng, *cfg.floor_fric_slide)
-            f[1] *= _logu(rng, *cfg.floor_fric_tors)
-            f[2] *= _logu(rng, *cfg.floor_fric_roll)
-            model.geom_friction[floor_gid] = f
 
         if ball_gid >= 0:
             f = base_geom_friction[ball_gid].copy()
