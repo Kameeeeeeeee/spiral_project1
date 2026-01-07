@@ -13,7 +13,7 @@ from stable_baselines3.common.monitor import Monitor
 # Edit these constants directly, no CLI.
 SEED = 0
 N_ENVS = 4
-TOTAL_TIMESTEPS = 2_000_000
+TOTAL_TIMESTEPS = 5_000_000
 
 LOGDIR = "runs_spiral"
 
