@@ -9,15 +9,15 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 
 # Edit these constants directly, no CLI.
-SEED = 78
-EPISODES = 100
+SEED = 0
+EPISODES = 5
 
 MODEL_PATH = "runs_spiral/ppo_spiral_final.zip"
 VECNORM_PATH = "runs_spiral/vecnormalize.pkl"
 
 
 if __name__ == "__main__":
-    env = DummyVecEnv([lambda: SpiralEnv(render_mode="human", cfg=EnvCfg(seed=SEED, domain_randomization=True))])
+    env = DummyVecEnv([lambda: SpiralEnv(render_mode="human", cfg=EnvCfg(seed=SEED, domain_randomization=False))])
 
     try:
         env = VecNormalize.load(VECNORM_PATH, env)
@@ -26,7 +26,7 @@ if __name__ == "__main__":
     except Exception:
         print("VecNormalize stats not found, running without normalization.")
 
-    model = PPO.load(MODEL_PATH)
+    model = PPO.load(MODEL_PATH, env=env)
 
     for ep in range(EPISODES):
         obs = env.reset()
@@ -39,7 +39,6 @@ if __name__ == "__main__":
             obs, rewards, dones, infos = env.step(action)
             ep_r += float(rewards[0])
             done = bool(dones[0])
-            time.sleep(0.001)
 
         dt = time.time() - t0
         info0 = infos[0] if isinstance(infos, (list, tuple)) else infos
