@@ -10,9 +10,9 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 # Edit these constants directly, no CLI.
 SEED = 0
-EPISODES = 10
+EPISODES = 100
 
-MODEL_PATH = "runs_spiral/ppo_spiral_final.zip"
+MODEL_PATH = "runs_spiral/ppo_spiral_continued.zip"
 VECNORM_PATH = "runs_spiral/vecnormalize.pkl"
 
 
