@@ -67,6 +67,11 @@ BALL_MIN_Y_CLEAR = 0.0
 BALL_BASE_X = 0.0
 BALL_BASE_Y = 0.0
 BALL_BASE_SEED = 0
+LEFT_Y_SIGN = -1.0
+CAM_TOP_NAME = "top"
+CAM_TOP_POS = (0.0, 0.0, 0.35)
+CAM_TOP_XYAXES = "1 0 0 0 -1 0"
+CAM_TOP_FOVY = 60.0
 
 
 @dataclass
@@ -273,8 +278,8 @@ def build_mjcf() -> str:
             site_x = max(site_x, 0.45 * x_hinge_span)
             y_site = max(y_site, 0.0045)
 
-        site_pos_l = f"{_fmt(site_x)} {_fmt(y_site)} 0"
-        site_pos_r = f"{_fmt(site_x)} {_fmt(-y_site)} 0"
+        site_pos_l = f"{_fmt(site_x)} {_fmt(LEFT_Y_SIGN * y_site)} 0"
+        site_pos_r = f"{_fmt(site_x)} {_fmt(-LEFT_Y_SIGN * y_site)} 0"
 
         if i == 0:
             body_pos = f"0 0 {_fmt(BASE_Z_OFFSET)}"
@@ -374,6 +379,7 @@ def build_mjcf() -> str:
 
   <worldbody>
     <light name=\"key\" pos=\"0.2 -0.3 0.4\" dir=\"-0.3 0.4 -0.8\" diffuse=\"0.7 0.7 0.7\"/>
+    <camera name=\"{CAM_TOP_NAME}\" pos=\"{_fmt(CAM_TOP_POS[0])} {_fmt(CAM_TOP_POS[1])} {_fmt(CAM_TOP_POS[2])}\" xyaxes=\"{CAM_TOP_XYAXES}\" fovy=\"{_fmt(CAM_TOP_FOVY)}\"/>
     <geom name=\"floor\" type=\"plane\" pos=\"0 0 -0.05\" size=\"1 1 0.1\"
           friction=\"{FLOOR_FRICTION}\" solimp=\"{SOLIMP}\" solref=\"{SOLREF}\"
           contype=\"1\" conaffinity=\"1\" condim=\"3\" rgba=\"0.2 0.2 0.2 1\"/>

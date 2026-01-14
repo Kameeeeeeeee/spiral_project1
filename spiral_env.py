@@ -20,8 +20,20 @@ class EnvCfg:
     episode_len: int = 450
     control_dt: float = 0.02
 
+    obs_mode: str = "state"  # "state" or "vision"
+    state_include_ball: bool = False  # only used for obs_mode="vision"
+    camera_name: str = "top"
+    image_size: int = 84
+    image_grayscale: bool = True
+    vision_randomization: bool = True
+    camera_mode: str = "free"  # "free" or "fixed"
+    camera_distance_scale: float = 1.6
+    camera_lookat_offset: tuple[float, float, float] = (0.06, 0.0, 0.0)
+    mirror_prob: float = 0.5
+
     action_mode: str = "delta"  # "delta" or "absolute"
     dmax_per_step: float = 8.0  # N change per control step for delta mode
+    action_smoothing: float = 0.2  # [0..1] low-pass on actions to avoid violent flips
 
     # Ball spawn curriculum (keeps tentacle straight, only moves ball difficulty)
     spawn_curriculum_episodes: int = 1
@@ -31,16 +43,30 @@ class EnvCfg:
     ctrl_slew_rate: float = 600.0  # N/s
 
     # Reward weights (phase-based)
-    w_reach: float = 3.0  # tip -> ball progress before touch
-    w_pull: float = 6.0  # ball -> base progress after touch
-    w_wrap: float = 2.0  # wrap fraction after touch
-    w_time: float = 0.002
-    w_effort_dT: float = 0.01  # penalty for changing tension (not absolute)
-    w_anti_away: float = 2.0
+    w_reach: float = 6.0  # tip -> ball progress before touch
+    w_align: float = 3.0  # align tip direction to ball (reach phase)
+    w_reach_away: float = 1.5  # penalty when tip moves away from ball
+    w_align_away: float = 0.5  # penalty when tip turns away from ball
+    w_dist_reach: float = 2.0  # dense shaping on tip-ball distance (normalized to init distance)
 
-    touch_bonus: float = 8.0
-    bonus_wrap_pull: float = 1.0
+    w_pull: float = 10.0  # ball -> base progress after touch
+    w_wrap: float = 3.0  # wrap fraction after touch
+    w_unwrap: float = 2.0  # penalty for losing wrap after touch
+    w_time: float = 0.001
+
+    w_effort_dT: float = 0.0  # no penalty for fast tension changes
+    dT_free: float = 0.08  # normalized change per step before penalty kicks in
+    w_anti_away: float = 3.0
+    ball_vel_k: float = 1.0  # penalty strength for excessive ball speed
+    ball_vel_vmax: float = 0.35  # m/s soft cap threshold
+    ball_vel_near: float = 0.06  # stronger penalty when ball is near base
+
+    touch_bonus: float = 12.0
+    bonus_wrap_pull: float = 2.0
     success_bonus: float = 10.0
+    touch_steps_required: int = 1
+    touch_min_contacts: int = 1
+    pull_wrap_min: float = 0.15
 
     # Success criteria
     success_ball_base: float = 0.035
@@ -61,6 +87,8 @@ class SpiralEnv(gym.Env):
 
         self.n_substeps = max(1, int(round(self.cfg.control_dt / float(self.model.opt.timestep))))
         self.dt_effective = float(self.model.opt.timestep) * self.n_substeps
+        self._camera_distance_scale = float(self.cfg.camera_distance_scale)
+        self._camera_lookat_offset = np.array(self.cfg.camera_lookat_offset, dtype=np.float32)
 
         # IDs from your model naming
         self.motor_left_ids: list[int] = []
@@ -94,8 +122,23 @@ class SpiralEnv(gym.Env):
         self.base_body_id = deb._find_id(self.model, mujoco.mjtObj.mjOBJ_BODY, "seg_00")
         self.ball_body_id = deb._find_id(self.model, mujoco.mjtObj.mjOBJ_BODY, "ball")
         self.ball_geom_id = deb._find_id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "ball_geom")
+        self.floor_geom_id = deb._find_id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
         if self.base_body_id < 0 or self.ball_body_id < 0 or self.ball_geom_id < 0:
             raise RuntimeError("Missing base/ball ids")
+
+        self._camera_mode = str(self.cfg.camera_mode)
+        self._mj_camera = mujoco.MjvCamera()
+        mujoco.mjv_defaultCamera(self._mj_camera)
+        if self._camera_mode == "fixed":
+            self._camera_id = deb._find_id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, self.cfg.camera_name)
+            if self._camera_id < 0:
+                raise RuntimeError(f"Missing camera id: {self.cfg.camera_name}")
+            self._mj_camera.type = mujoco.mjtCamera.mjCAMERA_FIXED
+            self._mj_camera.fixedcamid = int(self._camera_id)
+        else:
+            self._mj_camera.type = mujoco.mjtCamera.mjCAMERA_FREE
+            self._mj_camera.azimuth = 90.0
+            self._mj_camera.elevation = -90.0
 
         self.tip_body_id = deb._find_id(self.model, mujoco.mjtObj.mjOBJ_BODY, f"seg_{deb.N_SEGMENTS-1:02d}")
         if self.tip_body_id < 0:
@@ -121,6 +164,10 @@ class SpiralEnv(gym.Env):
         self.has_jnt_stiffness = hasattr(self.model, "jnt_stiffness")
         self.base_dof_spring = self.model.dof_spring.copy() if self.has_dof_spring else None
         self.base_jnt_stiffness = self.model.jnt_stiffness.copy() if self.has_jnt_stiffness else None
+        self.base_geom_rgba = self.model.geom_rgba.copy()
+        self.base_light_pos = self.model.light_pos.copy() if hasattr(self.model, "light_pos") else None
+        self.base_light_dir = self.model.light_dir.copy() if hasattr(self.model, "light_dir") else None
+        self.base_light_diffuse = self.model.light_diffuse.copy() if hasattr(self.model, "light_diffuse") else None
 
         self.dof_ids: list[int] = []
         self.joint_ids: list[int] = []
@@ -147,6 +194,7 @@ class SpiralEnv(gym.Env):
         self.dr_rng = np.random.default_rng(self.dr_cfg.seed)
         self.spawn_rng = np.random.default_rng(self.dr_cfg.seed + 1)
         self.runtime_rng = np.random.default_rng(self.dr_cfg.seed + 2)
+        self._mirror = False
 
         self._dr_strength = 0.0
         self._dr_late_start = 0.375
@@ -180,28 +228,53 @@ class SpiralEnv(gym.Env):
         self._action_delay = 0.0
         self._ctrl_slew_rate = self._ctrl_slew_rate_nominal
         self._prev_action = np.zeros(2, dtype=np.float32)
+        self._state_include_ball = (self.cfg.obs_mode == "state") or self.cfg.state_include_ball
+        self._image_height = int(self.cfg.image_size)
+        self._image_width = int(self.cfg.image_size)
+        self._image_grayscale = bool(self.cfg.image_grayscale)
+        self._vision_randomization = bool(self.cfg.vision_randomization and self.cfg.obs_mode == "vision")
+        self._image_noise_std_max = 6.0
+        self._image_brightness_jitter = 0.25
+        self._image_contrast_jitter = 0.2
+        self._geom_color_jitter_max = 0.35
+        self._light_pos_jitter = np.array([0.08, 0.08, 0.04], dtype=np.float32)
+        self._renderer = None
 
         # RL spaces
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
-        obs_dim = 0
-        obs_dim += (deb.N_SEGMENTS - 1)  # q
-        obs_dim += (deb.N_SEGMENTS - 1)  # qdot
-        obs_dim += 2  # Tcmd normalized
-        obs_dim += 3  # ball rel base
-        obs_dim += 2  # ball vel xy
-        obs_dim += 3  # base pos (for normalization stability)
-        obs_dim += 3  # tip pos (approx: last body pos)
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
+        state_dim = 0
+        state_dim += (deb.N_SEGMENTS - 1)  # q
+        state_dim += (deb.N_SEGMENTS - 1)  # qdot
+        state_dim += 2  # Tcmd normalized
+        if self._state_include_ball:
+            state_dim += 3  # ball rel base
+            state_dim += 2  # ball vel xy
+        state_dim += 3  # base pos (for normalization stability)
+        state_dim += 3  # tip pos (approx: last body pos)
 
-        self._obs_dim = obs_dim
+        if self.cfg.obs_mode == "state":
+            self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(state_dim,), dtype=np.float32)
+        else:
+            img_channels = 1 if self._image_grayscale else 3
+            img_shape = (img_channels, self._image_height, self._image_width)
+            self.observation_space = spaces.Dict(
+                {
+                    "state": spaces.Box(low=-np.inf, high=np.inf, shape=(state_dim,), dtype=np.float32),
+                    "image": spaces.Box(low=0, high=255, shape=img_shape, dtype=np.uint8),
+                }
+            )
+
+        self._obs_dim = state_dim
         self._step = 0
         self._episode_count = 0
         self._prev_d_tip_ball: float | None = None
         self._prev_d_ball_base: float | None = None
         self._prev_ang: float | None = None
         self._prev_wrap_frac: float | None = None
+        self._d_tip_ball_init: float | None = None
         self._touched = False
+        self._touch_steps = 0
 
         self.set_dr_strength(0.0)
 
@@ -220,6 +293,13 @@ class SpiralEnv(gym.Env):
         self.ctrl.mu_static = self._base_mu_static
         self.ctrl.mu_kinetic = self._base_mu_kinetic
         self.ctrl.cable_bias = self._base_cable_bias
+        self.model.geom_rgba[:] = self.base_geom_rgba
+        if self.base_light_pos is not None:
+            self.model.light_pos[:] = self.base_light_pos
+        if self.base_light_dir is not None:
+            self.model.light_dir[:] = self.base_light_dir
+        if self.base_light_diffuse is not None:
+            self.model.light_diffuse[:] = self.base_light_diffuse
 
     # This is copied 1:1 in logic from deb_v2.main() nested function, but placed here for import-ability.
     def apply_domain_randomization(self) -> None:
@@ -270,6 +350,39 @@ class SpiralEnv(gym.Env):
         self.ctrl.mu_static = deb._u(rng, *cfg.mu_static)
         self.ctrl.mu_kinetic = deb._u(rng, *cfg.mu_kinetic)
         self.ctrl.cable_bias = deb._u(rng, *cfg.cable_bias)
+        self._apply_visual_randomization()
+
+    def _apply_visual_randomization(self) -> None:
+        if not self._vision_randomization or self._dr_strength <= 0.0:
+            return
+
+        rng = self.dr_rng
+        strength = self._dr_strength
+
+        def _jitter_rgba(base_rgba: np.ndarray, lo: float, hi: float) -> np.ndarray:
+            scale = deb._u(rng, lo, hi)
+            rgb = np.clip(base_rgba[:3] * scale, 0.05, 0.98)
+            return np.array([rgb[0], rgb[1], rgb[2], base_rgba[3]], dtype=base_rgba.dtype)
+
+        lo = 1.0 - self._geom_color_jitter_max * strength
+        hi = 1.0 + self._geom_color_jitter_max * strength
+
+        if self.ball_geom_id >= 0:
+            base = self.base_geom_rgba[self.ball_geom_id]
+            self.model.geom_rgba[self.ball_geom_id] = _jitter_rgba(base, lo, hi)
+
+        if self.floor_geom_id >= 0:
+            base = self.base_geom_rgba[self.floor_geom_id]
+            self.model.geom_rgba[self.floor_geom_id] = _jitter_rgba(base, lo, hi)
+
+        if self.base_light_pos is not None:
+            jitter = self._light_pos_jitter * strength
+            delta = rng.uniform(-jitter, jitter, size=self.base_light_pos.shape)
+            self.model.light_pos[:] = self.base_light_pos + delta
+
+        if self.base_light_diffuse is not None:
+            scale = deb._u(rng, 1.0 - 0.2 * strength, 1.0 + 0.2 * strength)
+            self.model.light_diffuse[:] = np.clip(self.base_light_diffuse * scale, 0.2, 1.0)
 
     def _blend_range(self, narrow: tuple[float, float], full: tuple[float, float], u: float) -> tuple[float, float]:
         return (deb._lerp(narrow[0], full[0], u), deb._lerp(narrow[1], full[1], u))
@@ -373,25 +486,83 @@ class SpiralEnv(gym.Env):
                 touched.add(self.seg_geom_to_index[g1])
         return len(touched)
 
-    def _get_obs(self) -> np.ndarray:
+    def _get_state_obs(self, include_ball: bool) -> np.ndarray:
         q = np.array([self.data.qpos[a] for a in self.joint_qposadrs], dtype=np.float32)
         qd = np.array([self.data.qvel[a] for a in self.joint_qveladrs], dtype=np.float32)
 
-        base = self._base_pos()
-        ball = self._ball_pos()
-        tip = self._last_body_pos()
-        ball_rel = (ball - base).astype(np.float32)
-        ball_vel = self._ball_vel_xy()
-
+        base_raw = self._base_pos().astype(np.float32)
+        tip_raw = self._last_body_pos().astype(np.float32)
+        base = base_raw.copy()
+        tip = tip_raw.copy()
         tnorm = np.array([self.ctrl.T_left / self.ctrl.Tmax, self.ctrl.T_right / self.ctrl.Tmax], dtype=np.float32)
+        if self._mirror:
+            q = -q
+            qd = -qd
+            tnorm = tnorm[[1, 0]]
+            base[1] = -base[1]
+            tip[1] = -tip[1]
 
-        obs = np.concatenate(
-            [q, qd, tnorm, ball_rel, ball_vel, base.astype(np.float32), tip.astype(np.float32)],
-            dtype=np.float32,
-        )
+        parts = [q, qd, tnorm]
+        if include_ball:
+            ball = self._ball_pos().astype(np.float32)
+            ball_rel = (ball - base_raw).astype(np.float32)
+            ball_vel = self._ball_vel_xy()
+            if self._mirror:
+                ball_rel[1] = -ball_rel[1]
+                ball_vel[1] = -ball_vel[1]
+            parts.extend([ball_rel, ball_vel])
+
+        parts.extend([base, tip])
+        obs = np.concatenate(parts, dtype=np.float32)
         if self._obs_noise_std > 0.0:
             obs = obs + self.runtime_rng.normal(0.0, self._obs_noise_std, size=obs.shape).astype(np.float32)
         return obs
+
+    def _augment_image(self, img: np.ndarray) -> np.ndarray:
+        if not self._vision_randomization or self._dr_strength <= 0.0:
+            return img
+        strength = self._dr_strength
+        brightness = deb._u(self.runtime_rng, 1.0 - self._image_brightness_jitter * strength, 1.0 + self._image_brightness_jitter * strength)
+        contrast = deb._u(self.runtime_rng, 1.0 - self._image_contrast_jitter * strength, 1.0 + self._image_contrast_jitter * strength)
+        img = (img - 127.5) * contrast + 127.5 * brightness
+        noise_std = self._image_noise_std_max * strength
+        if noise_std > 0.0:
+            img = img + self.runtime_rng.normal(0.0, noise_std, size=img.shape)
+        return np.clip(img, 0.0, 255.0)
+
+    def _get_image_obs(self) -> np.ndarray:
+        if self._renderer is None:
+            self._renderer = mujoco.Renderer(self.model, height=self._image_height, width=self._image_width)
+        if self._camera_mode == "free":
+            self._mj_camera.lookat[:] = self._base_pos() + self._camera_lookat_offset
+            self._mj_camera.distance = max(0.1, float(self.model.stat.extent) * self._camera_distance_scale)
+        self._renderer.update_scene(self.data, camera=self._mj_camera)
+        img = self._renderer.render()
+        if img.dtype != np.uint8:
+            img = img.astype(np.float32)
+            if float(np.max(img)) <= 1.0:
+                img *= 255.0
+        else:
+            img = img.astype(np.float32)
+        img = self._augment_image(img)
+        if self._image_grayscale:
+            img = 0.299 * img[:, :, 0] + 0.587 * img[:, :, 1] + 0.114 * img[:, :, 2]
+            img = np.clip(img, 0.0, 255.0).astype(np.uint8)
+            if self._mirror:
+                img = img[:, ::-1]
+            return img[None, :, :]
+        img = np.clip(img, 0.0, 255.0).astype(np.uint8)
+        img = np.transpose(img, (2, 0, 1))
+        if self._mirror:
+            img = img[:, :, ::-1]
+        return img
+
+    def _get_obs(self):
+        state = self._get_state_obs(self._state_include_ball)
+        if self.cfg.obs_mode == "state":
+            return state
+        image = self._get_image_obs()
+        return {"state": state, "image": image}
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         super().reset(seed=seed)
@@ -433,7 +604,9 @@ class SpiralEnv(gym.Env):
         tip = self._last_body_pos()
         self._prev_d_tip_ball = float(np.linalg.norm(tip - ball))
         self._prev_d_ball_base = float(np.linalg.norm(ball - base))
+        self._d_tip_ball_init = float(self._prev_d_tip_ball)
         self._touched = False
+        self._touch_steps = 0
         self._prev_wrap_frac = 0.0
         v1 = tip[:2] - base[:2]
         v2 = ball[:2] - base[:2]
@@ -442,11 +615,19 @@ class SpiralEnv(gym.Env):
         c = float(np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0))
         self._prev_ang = float(np.arccos(c))
 
+        self._mirror = bool(self.runtime_rng.random() < float(self.cfg.mirror_prob))
+
         return self._get_obs(), {"d_tip_ball": self._prev_d_tip_ball, "d_ball_base": self._prev_d_ball_base}
 
     def step(self, action: np.ndarray):
         self._step += 1
         a = np.asarray(action, dtype=np.float32).reshape(2)
+        a = np.clip(a, -1.0, 1.0).astype(np.float32)
+        if self._mirror:
+            a = a[[1, 0]]
+        if self.cfg.action_smoothing > 0.0:
+            s = float(np.clip(self.cfg.action_smoothing, 0.0, 0.95))
+            a = (1.0 - s) * a + s * self._prev_action
         if self._action_delay > 0.0:
             a = (1.0 - self._action_delay) * a + self._action_delay * self._prev_action
         a = np.clip(a, -1.0, 1.0).astype(np.float32)
@@ -478,12 +659,14 @@ class SpiralEnv(gym.Env):
         base = self._base_pos()
         ball = self._ball_pos()
         tip = self._last_body_pos()
+        ball_vel = self._ball_vel_xy()
+        ball_speed = float(np.linalg.norm(ball_vel))
 
         d_tip_ball = float(np.linalg.norm(tip - ball))
         d_ball_base = float(np.linalg.norm(ball - base))
 
         wrap_count = self._count_wrap_contacts()
-        wrap_frac = float(wrap_count) / float(deb.N_SEGMENTS)
+        wrap_frac = float(wrap_count) / float(max(1, deb.N_SEGMENTS - 1))
 
         prev_tip = float(self._prev_d_tip_ball if self._prev_d_tip_ball is not None else d_tip_ball)
         prev_ball = float(self._prev_d_ball_base if self._prev_d_ball_base is not None else d_ball_base)
@@ -499,9 +682,15 @@ class SpiralEnv(gym.Env):
         ang_progress = prev_ang - ang
         self._prev_ang = ang
 
-        # clip progress to reduce noise spikes
-        tip_prog_c = float(np.clip(tip_progress, -0.02, 0.02))
-        ball_prog_c = float(np.clip(ball_progress, -0.02, 0.02))
+        # clip progress to reduce noise spikes (wider clips = less "stuck" policies)
+        tip_prog_c = float(np.clip(tip_progress, -0.05, 0.05))
+        ball_prog_c = float(np.clip(ball_progress, -0.05, 0.05))
+        ang_prog_c = float(np.clip(ang_progress, -0.05, 0.05))
+        tip_prog_pos = max(0.0, tip_prog_c)
+        tip_prog_neg = max(0.0, -tip_prog_c)
+        ball_prog_pos = max(0.0, ball_prog_c)
+        ang_prog_pos = max(0.0, ang_prog_c)
+        ang_prog_neg = max(0.0, -ang_prog_c)
 
         # effort as change in commanded tension (sim2real-friendly)
         dT = abs(dL) + abs(dR)
@@ -512,26 +701,46 @@ class SpiralEnv(gym.Env):
         self._prev_wrap_frac = wrap_frac
 
         r = 0.0
+        contacted = wrap_count >= self.cfg.touch_min_contacts
+        if contacted:
+            self._touch_steps += 1
+        else:
+            self._touch_steps = 0
+
         if not self._touched:
             # Phase 1: reach the ball with the tip
-            r += self.cfg.w_reach * tip_prog_c
-            if wrap_count > 0:
+            r += self.cfg.w_reach * tip_prog_pos
+            r += self.cfg.w_align * ang_prog_pos
+            r += -self.cfg.w_reach_away * tip_prog_neg
+            r += -self.cfg.w_align_away * ang_prog_neg
+            if self._d_tip_ball_init and self._d_tip_ball_init > 1e-6:
+                reach_shape = 1.0 - (d_tip_ball / self._d_tip_ball_init)
+                r += self.cfg.w_dist_reach * float(np.clip(reach_shape, -1.0, 1.0))
+            if self._touch_steps >= self.cfg.touch_steps_required:
                 r += self.cfg.touch_bonus
                 self._touched = True
         else:
             # Phase 2: pull ball to base while keeping/adding wrap
-            r += self.cfg.w_pull * ball_prog_c
+            if wrap_frac >= self.cfg.pull_wrap_min:
+                r += self.cfg.w_pull * ball_prog_pos
             r += self.cfg.w_wrap * wrap_frac
             r += 1.0 * float(np.clip(wrap_delta, -0.05, 0.05))
-
+            if wrap_delta < 0.0:
+                r += -self.cfg.w_unwrap * float(np.clip(-wrap_delta, 0.0, 0.05))
             if ball_progress < 0.0:
                 r += self.cfg.w_anti_away * ball_prog_c
-
             if wrap_frac > 0.20 and ball_progress > 0.0:
                 r += self.cfg.bonus_wrap_pull
 
         r += -self.cfg.w_time
-        r += -self.cfg.w_effort_dT * dT_norm
+        dT_excess = max(0.0, dT_norm - self.cfg.dT_free)
+        r += -self.cfg.w_effort_dT * dT_excess
+        if self._touched:
+            v_excess = max(0.0, ball_speed - self.cfg.ball_vel_vmax)
+            pen_v = self.cfg.ball_vel_k * v_excess * v_excess
+            if d_ball_base < self.cfg.ball_vel_near:
+                pen_v *= 2.0
+            r += -pen_v
 
         self._prev_d_tip_ball = d_tip_ball
         self._prev_d_ball_base = d_ball_base
@@ -560,6 +769,12 @@ class SpiralEnv(gym.Env):
 
         return obs, float(r), terminated, truncated, info
 
+    def get_ball_rel(self) -> np.ndarray:
+        return (self._ball_pos() - self._base_pos()).astype(np.float32)
+
+    def render_camera(self) -> np.ndarray:
+        return self._get_image_obs()
+
     def render(self):
         if self.render_mode != "human":
             return None
@@ -577,6 +792,12 @@ class SpiralEnv(gym.Env):
             except Exception:
                 pass
             self._viewer = None
+        if self._renderer is not None:
+            try:
+                self._renderer.close()
+            except Exception:
+                pass
+            self._renderer = None
 
 
 def make_env(render_mode: str | None = None) -> SpiralEnv:
