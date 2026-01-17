@@ -29,7 +29,8 @@ USE_CAPSTAN_DEMO_ONLY = True
 
 TIMESTEP = 0.0005
 
-FLOOR_FRICTION = "0 0 0"
+FLOOR_Z = -0.05
+FLOOR_FRICTION = "0.85 0.002 0.0002"
 SOLIMP = "0.998 0.998 0.0002"
 SOLREF = "0.003 1.0"
 MARGIN = 0.00025
@@ -56,12 +57,11 @@ MU_STATIC = 0.22
 MU_KINETIC = 0.04
 DTRATE_LO = 30.0
 DTRATE_HI = 250.0
-BASE_Z_OFFSET = -0.03
 BALL_RADIUS = 0.012
 BALL_DENSITY = 1000.0
 BALL_Z_CLEARANCE = 0.002
 BALL_CLEARANCE_Y = 0.002
-BALL_FRICTION = "0.1 0.0017 0.0000033"
+BALL_FRICTION = "0.08 0.0010 0.0006"
 BALL_SPAWN_RADIUS = 0.0
 BALL_MIN_Y_CLEAR = 0.0
 BALL_BASE_X = 0.0
@@ -84,9 +84,9 @@ class DomainRandCfg:
     seg_fric_tors: tuple[float, float] = (0.7, 1.6)
     seg_fric_roll: tuple[float, float] = (0.5, 2.0)
 
-    ball_fric_slide: tuple[float, float] = (0.7, 1.4)
-    ball_fric_tors: tuple[float, float] = (0.7, 1.6)
-    ball_fric_roll: tuple[float, float] = (0.5, 2.0)
+    ball_fric_slide: tuple[float, float] = (0.9, 1.1)
+    ball_fric_tors: tuple[float, float] = (0.8, 1.2)
+    ball_fric_roll: tuple[float, float] = (0.7, 1.3)
 
     dof_damping: tuple[float, float] = (0.7, 1.5)
     dof_frictionloss: tuple[float, float] = (0.7, 1.8)
@@ -228,6 +228,8 @@ def build_mjcf() -> str:
 
     scale_factor = TARGET_LENGTH_M / measured_length
     scaled_length = measured_length * scale_factor
+    seg0_zspan = seg_info[0]["zspan"] * scale_factor
+    base_z_offset = FLOOR_Z + 0.5 * seg0_zspan
 
     base_width = seg_info[0]["yspan"] * scale_factor
     tip_width = seg_info[-1]["yspan"] * scale_factor
@@ -245,7 +247,7 @@ def build_mjcf() -> str:
     spawn_radius = scaled_length * 0.8
     min_y_clear = 0.5 * max(base_width, tip_width) + BALL_RADIUS + BALL_CLEARANCE_Y
     ball_x, ball_y = _sample_ball_xy(spawn_radius, min_y_clear, rng)
-    ball_z = BASE_Z_OFFSET
+    ball_z = FLOOR_Z + BALL_RADIUS + BALL_Z_CLEARANCE
     BALL_SPAWN_RADIUS = spawn_radius
     BALL_MIN_Y_CLEAR = min_y_clear
     BALL_BASE_X = ball_x
@@ -282,7 +284,7 @@ def build_mjcf() -> str:
         site_pos_r = f"{_fmt(site_x)} {_fmt(-LEFT_Y_SIGN * y_site)} 0"
 
         if i == 0:
-            body_pos = f"0 0 {_fmt(BASE_Z_OFFSET)}"
+            body_pos = f"0 0 {_fmt(base_z_offset)}"
         else:
             prev_xlen = seg_info[i - 1]["xspan_eff"] * scale_factor
             pitch = prev_xlen + CLEARANCE_X
@@ -380,16 +382,19 @@ def build_mjcf() -> str:
   <worldbody>
     <light name=\"key\" pos=\"0.2 -0.3 0.4\" dir=\"-0.3 0.4 -0.8\" diffuse=\"0.7 0.7 0.7\"/>
     <camera name=\"{CAM_TOP_NAME}\" pos=\"{_fmt(CAM_TOP_POS[0])} {_fmt(CAM_TOP_POS[1])} {_fmt(CAM_TOP_POS[2])}\" xyaxes=\"{CAM_TOP_XYAXES}\" fovy=\"{_fmt(CAM_TOP_FOVY)}\"/>
-    <geom name=\"floor\" type=\"plane\" pos=\"0 0 -0.05\" size=\"1 1 0.1\"
+    <geom name=\"floor\" type=\"plane\" pos=\"0 0 {_fmt(FLOOR_Z)}\" size=\"1 1 0.1\"
           friction=\"{FLOOR_FRICTION}\" solimp=\"{SOLIMP}\" solref=\"{SOLREF}\"
-          contype=\"1\" conaffinity=\"1\" condim=\"3\" rgba=\"0.2 0.2 0.2 1\"/>
+          contype=\"1\" conaffinity=\"1\" condim=\"6\" rgba=\"0.2 0.2 0.2 1\"/>
     <body name=\"ball\" pos=\"{_fmt(ball_x)} {_fmt(ball_y)} {_fmt(ball_z)}\">
-      <joint name=\"ball_slide_x\" type=\"slide\" axis=\"1 0 0\"/>
-      <joint name=\"ball_slide_y\" type=\"slide\" axis=\"0 1 0\"/>
-      <joint name=\"ball_rot\" type=\"ball\"/>
+      <joint name=\"ball_slide_x\" type=\"slide\" axis=\"1 0 0\" damping=\"0.25\" frictionloss=\"0.015\"/>
+      <joint name=\"ball_slide_y\" type=\"slide\" axis=\"0 1 0\" damping=\"0.25\" frictionloss=\"0.015\"/>
+      <joint name=\"ball_slide_z\" type=\"slide\" axis=\"0 0 1\" limited=\"true\" range=\"-0.003 0.020\"
+             damping=\"0.60\" frictionloss=\"0.025\"/>
+      <joint name=\"ball_rot\" type=\"ball\" damping=\"0.003\"/>
       <geom name=\"ball_geom\" type=\"sphere\" size=\"{_fmt(BALL_RADIUS)}\" density=\"{_fmt(BALL_DENSITY)}\"
             friction=\"{BALL_FRICTION}\" solimp=\"{SOLIMP}\" solref=\"{SOLREF}\"
-            contype=\"1\" conaffinity=\"1\" condim=\"3\" rgba=\"0.9 0.2 0.2 1\"/>
+            margin=\"0.0012\" gap=\"0.0005\"
+            contype=\"1\" conaffinity=\"1\" condim=\"6\" rgba=\"0.9 0.2 0.2 1\"/>
     </body>
 
 {chr(10).join(body_lines)}
@@ -623,10 +628,12 @@ def main() -> None:
 
     ball_x_jid = _find_id(model, mujoco.mjtObj.mjOBJ_JOINT, "ball_slide_x")
     ball_y_jid = _find_id(model, mujoco.mjtObj.mjOBJ_JOINT, "ball_slide_y")
-    if ball_x_jid < 0 or ball_y_jid < 0:
+    ball_z_jid = _find_id(model, mujoco.mjtObj.mjOBJ_JOINT, "ball_slide_z")
+    if ball_x_jid < 0 or ball_y_jid < 0 or ball_z_jid < 0:
         raise RuntimeError("Missing ball slide joint id")
     ball_x_qadr = int(model.jnt_qposadr[ball_x_jid])
     ball_y_qadr = int(model.jnt_qposadr[ball_y_jid])
+    ball_z_qadr = int(model.jnt_qposadr[ball_z_jid])
     ball_bid = _find_id(model, mujoco.mjtObj.mjOBJ_BODY, "ball")
 
     geom_seg_ids = []
@@ -683,6 +690,9 @@ def main() -> None:
             f[0] *= _logu(rng, *cfg.ball_fric_slide)
             f[1] *= _logu(rng, *cfg.ball_fric_tors)
             f[2] *= _logu(rng, *cfg.ball_fric_roll)
+            f[0] = float(np.clip(f[0], 0.05, 0.20))
+            f[1] = float(np.clip(f[1], 0.0004, 0.0025))
+            f[2] = float(np.clip(f[2], 0.0002, 0.0012))
             model.geom_friction[ball_gid] = f
 
         for dof in dof_ids:
@@ -751,6 +761,7 @@ def main() -> None:
         ball_x, ball_y = _sample_ball_xy(BALL_SPAWN_RADIUS, BALL_MIN_Y_CLEAR, spawn_rng)
         data.qpos[ball_x_qadr] = ball_x - BALL_BASE_X
         data.qpos[ball_y_qadr] = ball_y - BALL_BASE_Y
+        data.qpos[ball_z_qadr] = 0.0
         mujoco.mj_forward(model, data)
         ctrl.demo_active = False
         ctrl.demo_stage = 0

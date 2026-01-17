@@ -26,7 +26,7 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 # Edit these constants directly, no CLI.
 SEED = 0
 N_ENVS = 4
-TOTAL_TIMESTEPS = 50_000
+TOTAL_TIMESTEPS = 5_000_000
 
 LOGDIR = "runs_spiral"
 MODEL_PREFIX = "ppo_spiral_vision"

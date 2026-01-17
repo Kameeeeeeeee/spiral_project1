@@ -33,8 +33,8 @@ MODEL_PATH = "runs_spiral\ppo_spiral_vision_continued100k.zip"
 
 MODEL_PATH = "runs_spiral/ppo_spiral_vision_final.zip"
 
-MODEL_PATH = "runs_spiral/checkpoints/ppo_spiral_vision_2457344_steps.zip"
-MODEL_PATH = "runs_spiral/best/best_model.zip"
+MODEL_PATH = "runs_spiral/checkpoints/ppo_spiral_vision_11600000_steps.zip"
+#MODEL_PATH = "runs_spiral/best/best_model.zip"
 
 
 USE_DR = False
