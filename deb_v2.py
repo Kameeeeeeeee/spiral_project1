@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import time
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -72,6 +73,25 @@ CAM_TOP_NAME = "top"
 CAM_TOP_POS = (0.0, 0.0, 0.35)
 CAM_TOP_XYAXES = "1 0 0 0 -1 0"
 CAM_TOP_FOVY = 60.0
+
+
+def _windows_short_path(path: Path) -> str:
+    if os.name != "nt":
+        return str(path)
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        get_short = ctypes.windll.kernel32.GetShortPathNameW
+        get_short.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        get_short.restype = wintypes.DWORD
+        buf = ctypes.create_unicode_buffer(32768)
+        result = get_short(str(path), buf, len(buf))
+        if result == 0:
+            return str(path)
+        return buf.value
+    except Exception:
+        return str(path)
 
 
 @dataclass
@@ -241,7 +261,7 @@ def build_mjcf() -> str:
     print(f"base_width_scaled = {base_width:.6f} m")
     print(f"tip_width_scaled  = {tip_width:.6f} m")
 
-    meshdir = stl_dir.as_posix()
+    meshdir = Path(_windows_short_path(stl_dir)).as_posix()
 
     rng = np.random.default_rng(BALL_BASE_SEED)
     spawn_radius = scaled_length * 0.8

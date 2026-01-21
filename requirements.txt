@@ -1,0 +1,14 @@
+--pre
+--extra-index-url https://download.pytorch.org/whl/nightly/cu124
+numpy>=1.23
+scipy>=1.9
+stable-baselines3>=2.2.1
+gymnasium>=0.29
+mujoco>=2.3.7
+torch>=2.1
+torchvision>=0.16
+tqdm>=4.66
+pillow>=9.5
+tensorboard>=2.14
+trimesh>=4.0
+pynput>=1.7
