@@ -23,8 +23,8 @@ from stable_baselines3.common.monitor import Monitor
 
 # Edit these constants directly, no CLI.
 SEED = 0
-N_ENVS = 4
-EXTRA_TIMESTEPS = 5_000_000
+N_ENVS = 12
+EXTRA_TIMESTEPS = 10_000_000
 
 LOGDIR = Path("runs_spiral")
 MODEL_PREFIX = "ppo_spiral_vision"
@@ -132,8 +132,11 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.set_float32_matmul_precision("high")
+        torch.backends.cudnn.benchmark = True
     torch.set_num_threads(1)
     torch.set_num_interop_threads(1)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     resume_model_path = MODEL_PATH
     print("Resuming from:", resume_model_path)
@@ -169,7 +172,7 @@ if __name__ == "__main__":
     model = PPO.load(
         str(resume_model_path),
         env=env,
-        device="cpu",
+        device=device,
         tensorboard_log=str(LOGDIR / "tb"),
         seed=SEED,
     )

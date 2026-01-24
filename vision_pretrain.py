@@ -41,11 +41,11 @@ from vision_models import VisionModelCfg, BallRegressor
 
 # Edit these constants directly, no CLI.
 SEED = 0
-NUM_SAMPLES = 50_000
+NUM_SAMPLES = 100_000
 VAL_SPLIT = 0.1
-EPOCHS = 50
-BATCH_SIZE = 256
-LR = 1e-3
+EPOCHS = 40
+BATCH_SIZE = 1024
+LR = 3e-4
 DR_STRENGTH = 1.0
 DOMAIN_RANDOMIZATION = True
 VISION_RANDOMIZATION = True
@@ -152,10 +152,27 @@ def main() -> None:
     train_size = max(1, len(dataset) - val_size)
     train_ds, val_ds = random_split(dataset, [train_size, val_size])
 
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
-    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, drop_last=False)
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    use_cuda = device.type == "cuda"
+    if use_cuda:
+        torch.backends.cudnn.benchmark = True
+
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        drop_last=True,
+        num_workers=4,
+        pin_memory=use_cuda,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        drop_last=False,
+        num_workers=4,
+        pin_memory=use_cuda,
+    )
     model_cfg = VisionModelCfg(image_size=IMAGE_SIZE, in_channels=1, features_dim=128)
     model = BallRegressor(model_cfg).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)

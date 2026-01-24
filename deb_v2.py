@@ -21,6 +21,7 @@ ALPHA_DEFAULT = 0.992
 ALPHA_STEP = 0.002
 ALPHA_MIN = 0.9
 ALPHA_MAX = 0.9995
+TIP_BOOST_GAIN = 0.75
 
 T_STEP_DEFAULT = 0.5
 T_MAX = 100.0
@@ -514,20 +515,29 @@ def compute_segment_tensions(
     muL = _lerp(ctrl.mu_static, ctrl.mu_kinetic, uL)
     muR = _lerp(ctrl.mu_static, ctrl.mu_kinetic, uR)
 
-    ctrl.T_left_seg = _capstan_hysteresis(
+    t_left_cap = _capstan_hysteresis(
         ctrl.T_left,
         q,
         ctrl.T_left_seg,
         muL,
         ctrl.cable_bias,
     )
-    ctrl.T_right_seg = _capstan_hysteresis(
+    t_right_cap = _capstan_hysteresis(
         ctrl.T_right,
         q,
         ctrl.T_right_seg,
         muR,
         ctrl.cable_bias,
     )
+
+    alphaL = _lerp(ALPHA_DEFAULT, ALPHA_MAX, uL)
+    alphaR = _lerp(ALPHA_DEFAULT, ALPHA_MAX, uR)
+    t_left_alpha = _alpha_tensions(ctrl.T_left, alphaL)
+    t_right_alpha = _alpha_tensions(ctrl.T_right, alphaR)
+    boostL = TIP_BOOST_GAIN * _smoothstep(uL)
+    boostR = TIP_BOOST_GAIN * _smoothstep(uR)
+    ctrl.T_left_seg = [_lerp(c, a, boostL) for c, a in zip(t_left_cap, t_left_alpha)]
+    ctrl.T_right_seg = [_lerp(c, a, boostR) for c, a in zip(t_right_cap, t_right_alpha)]
 
     return ctrl.T_left_seg, ctrl.T_right_seg
 

@@ -25,8 +25,8 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 # Edit these constants directly, no CLI.
 SEED = 0
-N_ENVS = 4
-TOTAL_TIMESTEPS = 5_000_000
+N_ENVS = 12
+TOTAL_TIMESTEPS = 10_000_000
 
 LOGDIR = "runs_spiral"
 MODEL_PREFIX = "ppo_spiral_vision"
@@ -153,8 +153,11 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.set_float32_matmul_precision("high")
+        torch.backends.cudnn.benchmark = True
     torch.set_num_threads(1)
     torch.set_num_interop_threads(1)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     if N_ENVS <= 1:
         env = DummyVecEnv([_make(0)])
@@ -201,9 +204,9 @@ if __name__ == "__main__":
     model = PPO(
         "MultiInputPolicy",
         env,
-        device="cpu",
-        n_steps=2048,
-        batch_size=1024,
+        device=device,
+        n_steps=1024,
+        batch_size=3072,
         n_epochs=10,
         gae_lambda=0.95,
         gamma=0.99,
