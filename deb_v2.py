@@ -74,6 +74,12 @@ CAM_TOP_NAME = "top"
 CAM_TOP_POS = (0.0, 0.0, 0.35)
 CAM_TOP_XYAXES = "1 0 0 0 -1 0"
 CAM_TOP_FOVY = 60.0
+marker_length_m = 0.004
+MARKER_THICKNESS_M = 0.0006
+MARKER_SURFACE_CLEARANCE_M = 0.0002
+MARKER_EULER = "0 0 0"
+OFFSCREEN_WIDTH = 2048
+OFFSCREEN_HEIGHT = 2048
 
 
 def _windows_short_path(path: Path) -> str:
@@ -202,13 +208,20 @@ def build_mjcf() -> str:
 
     base_dir = Path(__file__).resolve().parent
     stl_dir = base_dir / "assets" / "spiral_tent_stls_vir"
+    aruco_dir = base_dir / "assets" / "Aruco4x4"
     if not stl_dir.is_dir():
         raise SystemExit(f"ERROR: STL directory not found: {stl_dir}")
+    if not aruco_dir.is_dir():
+        raise SystemExit(f"ERROR: ArUco directory not found: {aruco_dir}")
 
     stl_paths = [stl_dir / f"seg_{i:02d}.stl" for i in range(N_SEGMENTS)]
     for path in stl_paths:
         if not path.exists():
             raise SystemExit(f"ERROR: Missing STL file: {path}")
+    marker_img_paths = [aruco_dir / f"aruco_4x4_id_{i:02d}.png" for i in range(N_SEGMENTS)]
+    for path in marker_img_paths:
+        if not path.exists():
+            raise SystemExit(f"ERROR: Missing ArUco marker image: {path}")
 
     seg_info = []
     measured_length = 0.0
@@ -280,6 +293,16 @@ def build_mjcf() -> str:
             f'<mesh name="mesh_{i:02d}" file="seg_{i:02d}.stl" '
             f'scale="{_fmt(scale_factor)} {_fmt(scale_factor)} {_fmt(scale_factor)}"/>'
         )
+    marker_asset_lines = []
+    for i in range(N_SEGMENTS):
+        marker_file = Path(_windows_short_path(marker_img_paths[i])).as_posix()
+        marker_asset_lines.append(
+            f'<texture name="aruco_tex_{i:02d}" type="2d" file="{marker_file}"/>'
+        )
+        marker_asset_lines.append(
+            f'<material name="aruco_mat_{i:02d}" texture="aruco_tex_{i:02d}" '
+            f'rgba="1 1 1 1" specular="0.02" shininess="0.01" reflectance="0"/>'
+        )
 
     body_lines = []
     indent = "    "
@@ -291,6 +314,12 @@ def build_mjcf() -> str:
         z_center_s = 0.5 * (info["zmin"] + info["zmax"]) * scale_factor
 
         geom_pos = (-(x_back_s + PIVOT_X), -y_center_s, -z_center_s)
+        marker_center_x = 0.5 * (info["xmin"] + info["xmax"]) * scale_factor + geom_pos[0]
+        marker_center_y = 0.5 * (info["ymin"] + info["ymax"]) * scale_factor + geom_pos[1]
+        marker_top_z = info["zmax"] * scale_factor + geom_pos[2]
+        marker_center_z = (
+            marker_top_z + 0.5 * MARKER_THICKNESS_M + MARKER_SURFACE_CLEARANCE_M
+        )
 
         xlen_s = info["xspan_eff"] * scale_factor
         x_hinge_span = max(1e-6, xlen_s - 2.0 * PIVOT_X)
@@ -349,6 +378,13 @@ def build_mjcf() -> str:
             f"friction=\"{friction_i}\" solimp=\"{SOLIMP}\" solref=\"{SOLREF}\" "
             f"margin=\"{_fmt(MARGIN)}\" gap=\"{_fmt(GAP)}\"/>"
         )
+        body_lines.append(
+            f"{indent * (i + 1)}<geom name=\"aruco_marker_{i:02d}\" type=\"box\" "
+            f"size=\"{_fmt(0.5 * marker_length_m)} {_fmt(0.5 * marker_length_m)} {_fmt(0.5 * MARKER_THICKNESS_M)}\" "
+            f"pos=\"{_fmt(marker_center_x)} {_fmt(marker_center_y)} {_fmt(marker_center_z)}\" "
+            f"euler=\"{MARKER_EULER}\" material=\"aruco_mat_{i:02d}\" "
+            f"contype=\"0\" conaffinity=\"0\" mass=\"0\"/>"
+        )
         body_lines.append(f"{indent * (i + 1)}<site name=\"site_L_{i:02d}\" pos=\"{site_pos_l}\"/>")
         body_lines.append(f"{indent * (i + 1)}<site name=\"site_R_{i:02d}\" pos=\"{site_pos_r}\"/>")
 
@@ -388,6 +424,9 @@ def build_mjcf() -> str:
   <compiler angle=\"radian\" coordinate=\"local\" inertiafromgeom=\"true\" meshdir=\"{meshdir}\"/>
   <option timestep=\"{_fmt(TIMESTEP)}\" gravity=\"0 0 -9.81\" integrator=\"implicitfast\" iterations=\"800\" ls_iterations=\"300\"/>
   <size njmax=\"6000\" nconmax=\"6000\"/>
+  <visual>
+    <global offwidth=\"{OFFSCREEN_WIDTH}\" offheight=\"{OFFSCREEN_HEIGHT}\"/>
+  </visual>
   <contact>
 {exclude_block}
   </contact>
@@ -398,6 +437,7 @@ def build_mjcf() -> str:
 
   <asset>
     {''.join(mesh_lines)}
+    {''.join(marker_asset_lines)}
   </asset>
 
   <worldbody>

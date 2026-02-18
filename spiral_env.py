@@ -10,6 +10,7 @@ from gymnasium import spaces
 import mujoco
 
 import deb_v2 as deb
+from aruco_pipeline import ArucoConfig, ArucoPipeline
 
 
 @dataclass
@@ -30,10 +31,18 @@ class EnvCfg:
     camera_distance_scale: float = 1.6
     camera_lookat_offset: tuple[float, float, float] = (0.06, 0.0, 0.0)
     mirror_prob: float = 0.5
+    use_aruco_obs: bool = False
+    aruco_output_mode: str = "image2d"  # "image2d" or "pose3d"
+    aruco_camera_name: str = "top"
+    aruco_render_width: int = 640
+    aruco_render_height: int = 480
+    aruco_camera_matrix: np.ndarray | None = None
+    aruco_dist_coeffs: np.ndarray | None = None
 
     action_mode: str = "delta"  # "delta" or "absolute"
     dmax_per_step: float = 8.0  # N change per control step for delta mode
     action_smoothing: float = 0.2  # [0..1] low-pass on actions to avoid violent flips
+    action_history_len: int = 8  # number of recent 2D actions in observation
 
     # Ball spawn curriculum (keeps tentacle straight, only moves ball difficulty)
     spawn_curriculum_episodes: int = 1
@@ -228,7 +237,8 @@ class SpiralEnv(gym.Env):
         self._action_delay = 0.0
         self._ctrl_slew_rate = self._ctrl_slew_rate_nominal
         self._prev_action = np.zeros(2, dtype=np.float32)
-        self._state_include_ball = (self.cfg.obs_mode == "state") or self.cfg.state_include_ball
+        self._action_history_len = max(1, int(self.cfg.action_history_len))
+        self._actions_hist = np.zeros((self._action_history_len, 2), dtype=np.float32)
         self._image_height = int(self.cfg.image_size)
         self._image_width = int(self.cfg.image_size)
         self._image_grayscale = bool(self.cfg.image_grayscale)
@@ -239,28 +249,48 @@ class SpiralEnv(gym.Env):
         self._geom_color_jitter_max = 0.35
         self._light_pos_jitter = np.array([0.08, 0.08, 0.04], dtype=np.float32)
         self._renderer = None
+        self._aruco_renderer = None
+        self._use_aruco_obs = bool(self.cfg.use_aruco_obs)
+        self._aruco_pipeline: ArucoPipeline | None = None
+        self._aruco_state_dim = 0
+        self._last_aruco_info: dict[str, Any] = {}
+
+        if self._use_aruco_obs:
+            output_mode = str(self.cfg.aruco_output_mode).lower()
+            if output_mode == "pose3d" and (
+                self.cfg.aruco_camera_matrix is None or self.cfg.aruco_dist_coeffs is None
+            ):
+                # If intrinsics are unavailable, fallback to image2d to avoid runtime failure.
+                output_mode = "image2d"
+            ar_cfg = ArucoConfig(
+                dict_name="DICT_4X4_50",
+                marker_length_m=float(deb.marker_length_m),
+                output_mode=output_mode,  # type: ignore[arg-type]
+                expected_ids=list(range(19)),
+                camera_matrix=self.cfg.aruco_camera_matrix,
+                dist_coeffs=self.cfg.aruco_dist_coeffs,
+                input_color="RGB",
+            )
+            try:
+                self._aruco_pipeline = ArucoPipeline(ar_cfg)
+            except Exception as exc:
+                raise RuntimeError(
+                    "Failed to initialize ArUco pipeline. Ensure opencv-contrib-python is installed."
+                ) from exc
+            self._aruco_state_dim = int(self._aruco_pipeline.state_dim)
 
         # RL spaces
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
-        state_dim = 0
-        state_dim += (deb.N_SEGMENTS - 1)  # q
-        state_dim += (deb.N_SEGMENTS - 1)  # qdot
-        state_dim += 2  # Tcmd normalized
-        if self._state_include_ball:
-            state_dim += 3  # ball rel base
-            state_dim += 2  # ball vel xy
-        state_dim += 3  # base pos (for normalization stability)
-        state_dim += 3  # tip pos (approx: last body pos)
+        state_dim = self._action_history_len * 2 + self._aruco_state_dim
 
         if self.cfg.obs_mode == "state":
-            self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(state_dim,), dtype=np.float32)
+            self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(state_dim,), dtype=np.float32)
         else:
-            img_channels = 1 if self._image_grayscale else 3
-            img_shape = (img_channels, self._image_height, self._image_width)
+            img_shape = (self._image_height, self._image_width, 3)
             self.observation_space = spaces.Dict(
                 {
-                    "state": spaces.Box(low=-np.inf, high=np.inf, shape=(state_dim,), dtype=np.float32),
+                    "state": spaces.Box(low=-1.0, high=1.0, shape=(state_dim,), dtype=np.float32),
                     "image": spaces.Box(low=0, high=255, shape=img_shape, dtype=np.uint8),
                 }
             )
@@ -486,37 +516,9 @@ class SpiralEnv(gym.Env):
                 touched.add(self.seg_geom_to_index[g1])
         return len(touched)
 
-    def _get_state_obs(self, include_ball: bool) -> np.ndarray:
-        q = np.array([self.data.qpos[a] for a in self.joint_qposadrs], dtype=np.float32)
-        qd = np.array([self.data.qvel[a] for a in self.joint_qveladrs], dtype=np.float32)
-
-        base_raw = self._base_pos().astype(np.float32)
-        tip_raw = self._last_body_pos().astype(np.float32)
-        base = base_raw.copy()
-        tip = tip_raw.copy()
-        tnorm = np.array([self.ctrl.T_left / self.ctrl.Tmax, self.ctrl.T_right / self.ctrl.Tmax], dtype=np.float32)
-        if self._mirror:
-            q = -q
-            qd = -qd
-            tnorm = tnorm[[1, 0]]
-            base[1] = -base[1]
-            tip[1] = -tip[1]
-
-        parts = [q, qd, tnorm]
-        if include_ball:
-            ball = self._ball_pos().astype(np.float32)
-            ball_rel = (ball - base_raw).astype(np.float32)
-            ball_vel = self._ball_vel_xy()
-            if self._mirror:
-                ball_rel[1] = -ball_rel[1]
-                ball_vel[1] = -ball_vel[1]
-            parts.extend([ball_rel, ball_vel])
-
-        parts.extend([base, tip])
-        obs = np.concatenate(parts, dtype=np.float32)
-        if self._obs_noise_std > 0.0:
-            obs = obs + self.runtime_rng.normal(0.0, self._obs_noise_std, size=obs.shape).astype(np.float32)
-        return obs
+    def _get_state_obs(self) -> np.ndarray:
+        # Realistic state: only recent motor commands in normalized action space.
+        return self._actions_hist.reshape(-1).astype(np.float32, copy=True)
 
     def _augment_image(self, img: np.ndarray) -> np.ndarray:
         if not self._vision_randomization or self._dr_strength <= 0.0:
@@ -546,23 +548,39 @@ class SpiralEnv(gym.Env):
             img = img.astype(np.float32)
         img = self._augment_image(img)
         if self._image_grayscale:
-            img = 0.299 * img[:, :, 0] + 0.587 * img[:, :, 1] + 0.114 * img[:, :, 2]
+            gray = 0.299 * img[:, :, 0] + 0.587 * img[:, :, 1] + 0.114 * img[:, :, 2]
+            img = np.repeat(np.clip(gray, 0.0, 255.0).astype(np.uint8)[:, :, None], 3, axis=2)
+        else:
             img = np.clip(img, 0.0, 255.0).astype(np.uint8)
-            if self._mirror:
-                img = img[:, ::-1]
-            return img[None, :, :]
-        img = np.clip(img, 0.0, 255.0).astype(np.uint8)
-        img = np.transpose(img, (2, 0, 1))
         if self._mirror:
-            img = img[:, :, ::-1]
+            img = img[:, ::-1, :]
         return img
 
     def _get_obs(self):
-        state = self._get_state_obs(self._state_include_ball)
+        state = self._get_state_obs()
+        if self._use_aruco_obs:
+            aruco_state = self._get_aruco_state()
+            state = np.concatenate([state, aruco_state], axis=0).astype(np.float32, copy=False)
         if self.cfg.obs_mode == "state":
             return state
         image = self._get_image_obs()
         return {"state": state, "image": image}
+
+    def _get_aruco_state(self) -> np.ndarray:
+        if self._aruco_pipeline is None:
+            return np.zeros(0, dtype=np.float32)
+        if self._aruco_renderer is None:
+            self._aruco_renderer = mujoco.Renderer(
+                self.model,
+                height=int(self.cfg.aruco_render_height),
+                width=int(self.cfg.aruco_render_width),
+            )
+        # ArUco detection must run on full render resolution, no downscale in pipeline.
+        self._aruco_renderer.update_scene(self.data, camera=self.cfg.aruco_camera_name)
+        frame = self._aruco_renderer.render()
+        state_vec, info = self._aruco_pipeline.step(frame, timestamp=float(self.data.time))
+        self._last_aruco_info = info
+        return state_vec.astype(np.float32, copy=False)
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         super().reset(seed=seed)
@@ -595,6 +613,7 @@ class SpiralEnv(gym.Env):
         self.ctrl.T_right_prev = 0.0
         self.data.ctrl[:] = 0.0
         self._prev_action = np.zeros(2, dtype=np.float32)
+        self._actions_hist.fill(0.0)
 
         mujoco.mj_forward(self.model, self.data)
 
@@ -616,6 +635,7 @@ class SpiralEnv(gym.Env):
         self._prev_ang = float(np.arccos(c))
 
         self._mirror = bool(self.runtime_rng.random() < float(self.cfg.mirror_prob))
+        self._last_aruco_info = {}
 
         return self._get_obs(), {"d_tip_ball": self._prev_d_tip_ball, "d_ball_base": self._prev_d_ball_base}
 
@@ -632,6 +652,10 @@ class SpiralEnv(gym.Env):
             a = (1.0 - self._action_delay) * a + self._action_delay * self._prev_action
         a = np.clip(a, -1.0, 1.0).astype(np.float32)
         self._prev_action = a.copy()
+        # History stores the normalized command signal after mirror/smoothing/delay/clip.
+        # This keeps a bounded, mode-agnostic signal across both absolute and delta action_mode.
+        self._actions_hist[:-1] = self._actions_hist[1:]
+        self._actions_hist[-1] = a
 
         if self.cfg.action_mode == "absolute":
             self.ctrl.T_left_target = deb._clip(0.5 * (float(a[0]) + 1.0) * self.ctrl.Tmax, 0.0, self.ctrl.Tmax)
@@ -763,6 +787,8 @@ class SpiralEnv(gym.Env):
             "a1": float(a[1]),
             "Tsum": float(self.ctrl.T_left + self.ctrl.T_right),
         }
+        if self._use_aruco_obs:
+            info["aruco"] = self._last_aruco_info
 
         if self.render_mode == "human":
             self.render()
@@ -798,6 +824,12 @@ class SpiralEnv(gym.Env):
             except Exception:
                 pass
             self._renderer = None
+        if self._aruco_renderer is not None:
+            try:
+                self._aruco_renderer.close()
+            except Exception:
+                pass
+            self._aruco_renderer = None
 
 
 def make_env(render_mode: str | None = None) -> SpiralEnv:

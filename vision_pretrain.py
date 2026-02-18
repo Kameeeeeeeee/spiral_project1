@@ -41,7 +41,7 @@ from vision_models import VisionModelCfg, BallRegressor
 
 # Edit these constants directly, no CLI.
 SEED = 0
-NUM_SAMPLES = 100_000
+NUM_SAMPLES = 100
 VAL_SPLIT = 0.1
 EPOCHS = 40
 BATCH_SIZE = 1024
@@ -82,6 +82,17 @@ def _set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def _camera_to_chw_gray(img: np.ndarray) -> np.ndarray:
+    """Convert env camera image to CHW grayscale uint8 for pretraining."""
+    arr = np.asarray(img)
+    if arr.ndim == 3 and arr.shape[-1] == 3:
+        gray = (0.299 * arr[:, :, 0] + 0.587 * arr[:, :, 1] + 0.114 * arr[:, :, 2]).astype(np.uint8)
+        return gray[None, :, :]
+    if arr.ndim == 3 and arr.shape[0] == 1:
+        return arr.astype(np.uint8, copy=False)
+    raise ValueError(f"Unsupported camera image shape: {arr.shape}")
+
+
 def _collect_dataset(path: Path) -> tuple[np.ndarray, np.ndarray]:
     cfg = EnvCfg(
         seed=SEED,
@@ -118,7 +129,7 @@ def _collect_dataset(path: Path) -> tuple[np.ndarray, np.ndarray]:
                 if dist > max_ball_distance:
                     skipped += 1
                     continue
-            images[i] = env.render_camera()
+            images[i] = _camera_to_chw_gray(env.render_camera())
             labels[i] = ball_rel[:2]
             i += 1
             pbar.update(1)

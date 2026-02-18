@@ -113,7 +113,9 @@ class SpiralVisionExtractor(BaseFeaturesExtractor):
     ) -> None:
         image_space = observation_space["image"]
         state_space = observation_space["state"]
-        img_channels, img_h, img_w = image_space.shape
+        if len(image_space.shape) != 3:
+            raise ValueError(f"Expected image shape (H, W, C), got {image_space.shape}.")
+        img_h, img_w, img_channels = image_space.shape
         if img_h != img_w:
             raise ValueError("Expected square images.")
 
@@ -142,7 +144,7 @@ class SpiralVisionExtractor(BaseFeaturesExtractor):
                 param.requires_grad = False
 
     def forward(self, obs):
-        img = obs["image"].float().div(255.0)
+        img = obs["image"].float().div(255.0).permute(0, 3, 1, 2).contiguous()
         state = obs["state"].float()
         img_features = self.image_net(img)
         state_features = self.state_net(state)
@@ -187,6 +189,11 @@ if __name__ == "__main__":
             )
         ]
     )
+
+    sample_obs_space = env.observation_space
+    state_dim = int(sample_obs_space["state"].shape[0])
+    action_hist_len = state_dim // 2
+    print(f"Obs config: action_history_len(k)={action_hist_len}, state_dim={state_dim}")
 
     policy_kwargs = dict(
         features_extractor_class=SpiralVisionExtractor,

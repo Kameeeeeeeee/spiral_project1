@@ -13,9 +13,8 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 SEED = 0
 EPISODES = 50
 
-MODEL_PATH = "runs_spiral/ppo_spiral_vision_final.zip" 
-MODEL_PATH = "runs_spiral/checkpoints/ppo_spiral_vision_5857344_steps.zip"
-MODEL_PATH = "runs_spiral/best/best_model.zip"
+# Model trained with action-history-only state (action_history_len=8).
+MODEL_PATH = "runs_spiral/ppo_spiral_vision_actions_hist_final.zip"
 
 
 if __name__ == "__main__":
@@ -39,7 +38,16 @@ if __name__ == "__main__":
         ]
     )
 
-    model = PPO.load(MODEL_PATH, env=env)
+    try:
+        model = PPO.load(MODEL_PATH, env=env)
+    except Exception as e:
+        msg = str(e)
+        raise RuntimeError(
+            "Failed to load PPO model. Most likely the checkpoint is from the old observation format and is "
+            "incompatible with the new state shape (2 * action_history_len). Retrain with "
+            "train_spiral_ppo_vision.py and set MODEL_PATH to the new checkpoint.\n"
+            f"MODEL_PATH={MODEL_PATH}\nOriginal error: {msg}"
+        ) from e
 
     for ep in range(EPISODES):
         obs = env.reset()
