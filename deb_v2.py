@@ -850,9 +850,9 @@ def main() -> None:
             ctrl.demo_active = False
             ctrl.T_right = _clip(ctrl.T_right - ctrl.T_step, 0.0, ctrl.Tmax)
             ctrl.T_right_target = ctrl.T_right
-        elif k in ("[", "х"):
+        elif k in ("o", "щ"):
             ctrl.T_step = max(0.5, ctrl.T_step * 0.8)
-        elif k in ("]", "ъ"):
+        elif k in ("p", "з"):
             ctrl.T_step = min(20.0, ctrl.T_step * 1.25)
         elif k == "1":
             ctrl.demo_active = False
