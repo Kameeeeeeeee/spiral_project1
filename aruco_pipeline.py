@@ -32,7 +32,7 @@ class ArucoConfig:
     # Allowed marker perimeter range, normalized by image size.
     # Higher minimum rejects tiny unstable markers and most false positives.
     minMarkerPerimeterRate: float = 0.01
-    maxMarkerPerimeterRate: float = 2.5
+    maxMarkerPerimeterRate: float = 4.0
     # Error correction for code decoding. Higher catches harder cases but can increase false IDs.
     errorCorrectionRate: float = 0.82
     # Additional geometric filtering to suppress false detections.
@@ -42,6 +42,8 @@ class ArucoConfig:
     min_detection_score: float = 0.22
     # Optional refine pass after detection.
     useRefineDetectedMarkers: bool = False
+    # Reject unstable pose solutions when in pose3d mode.
+    max_reprojection_error_px: float = 3.0
     # Tracking controls.
     max_lost_frames: int = 12
     smoothing_alpha: float = 0.6
@@ -55,6 +57,16 @@ class ArucoConfig:
     quality_min_score_ratio: float = 0.70
     # Input color order of frame.
     input_color: Literal["BGR", "RGB"] = "RGB"
+    # Pack per-segment tracking age features into RL state.
+    include_tracking_features: bool = True
+    # Track is considered alive for control if lost_frames <= alive_k_frames.
+    alive_k_frames: int = 3
+    # In pose3d mode, append [age, k] to each segment state.
+    include_age_k: bool = True
+    # age normalization strategy: "frames_norm" -> age in [0,1], k=1.
+    age_norm_mode: str = "frames_norm"
+    # In pose3d mode, require world marker (id=0) to emit valid segment poses.
+    require_world_for_pose3d: bool = True
 
 
 class ArucoDetector:
@@ -109,7 +121,7 @@ class ArucoDetector:
         if hasattr(params, "errorCorrectionRate"):
             params.errorCorrectionRate = float(self.config.errorCorrectionRate)
         if hasattr(params, "minDistanceToBorder"):
-            params.minDistanceToBorder = 1
+            params.minDistanceToBorder = 2
         if hasattr(params, "minMarkerDistanceRate"):
             params.minMarkerDistanceRate = 0.01
         if hasattr(params, "adaptiveThreshConstant"):
@@ -171,7 +183,20 @@ class ArucoDetector:
             return corners, ids, rejected
         try:
             if hasattr(self._aruco, "refineDetectedMarkers"):
-                self._aruco.refineDetectedMarkers(gray, None, corners, ids, rejected, parameters=self._params)
+                refined = self._aruco.refineDetectedMarkers(
+                    image=gray,
+                    board=None,
+                    detectedCorners=corners,
+                    detectedIds=ids,
+                    rejectedCorners=rejected,
+                    cameraMatrix=self.config.camera_matrix,
+                    distCoeffs=self.config.dist_coeffs,
+                    parameters=self._params,
+                )
+                if isinstance(refined, tuple) and len(refined) >= 3:
+                    corners = refined[0]
+                    ids = refined[1]
+                    rejected = refined[2]
         except Exception:
             pass
         return corners, ids, rejected
@@ -254,16 +279,10 @@ class ArucoDetector:
         Returns dict[id] with corners_px, center_px, optional rvec/tvec, and quality values.
         """
         gray = self._to_gray(frame)
+        gray = self._cv2.GaussianBlur(gray, (3, 3), 0)
         variants: list[tuple[np.ndarray, float]] = [(gray, 1.0)]
-
-        # Full-resolution preprocessing variants for robustness to glare and blur.
-        clahe = self._cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-        gray_clahe = clahe.apply(gray)
-        variants.append((gray_clahe, 1.0))
-
-        blur = self._cv2.GaussianBlur(gray, (0, 0), 1.0)
-        sharp = self._cv2.addWeighted(gray, 1.5, blur, -0.5, 0)
-        variants.append((np.clip(sharp, 0, 255).astype(np.uint8), 1.0))
+        # Keep only one additional upscaled pass to improve tiny-marker recall
+        # while limiting false positives from aggressive preprocessing variants.
         gray_up = self._cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=self._cv2.INTER_CUBIC)
         variants.append((gray_up, 2.0))
 
@@ -281,7 +300,8 @@ class ArucoDetector:
                     continue
                 center = np.mean(c, axis=0).astype(np.float32)
                 peri = self._perimeter(c)
-                contrast, sharpness = self._patch_stats(gray_i, c)
+                # Score must be computed in the same coordinate system as corners (base gray).
+                contrast, sharpness = self._patch_stats(gray, c)
                 refine_bonus = 0.15 if self.config.cornerRefinementMethod != 0 else 0.0
                 score = 0.0
                 score += np.clip(peri / 400.0, 0.0, 0.5)
@@ -291,6 +311,8 @@ class ArucoDetector:
                 if score < float(self.config.min_detection_score):
                     continue
                 rvec, tvec, reproj = self._estimate_pose(c, marker_id)
+                if reproj is not None and float(reproj) > float(self.config.max_reprojection_error_px):
+                    continue
                 candidate = {
                     "corners_px": c,
                     "center_px": center,
@@ -502,22 +524,31 @@ def _matrix_to_quat_wxyz(T: np.ndarray) -> np.ndarray:
 
 def pack_state(
     tracks: dict[int, dict[str, Any]],
+    world_pose: np.ndarray | None,
     mode: str,
     frame_shape: tuple[int, ...],
+    config: ArucoConfig,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     H, W = int(frame_shape[0]), int(frame_shape[1])
     info: dict[str, Any] = {}
     if mode == "pose3d":
-        world = tracks.get(0, {})
-        world_valid = bool(world.get("valid", False)) and world.get("rvec") is not None and world.get("tvec") is not None
-        T_cam_world = pose_to_matrix(np.asarray(world["rvec"]), np.asarray(world["tvec"])) if world_valid else None
+        world_valid = world_pose is not None
+        T_cam_world = world_pose
         parts: list[np.ndarray] = []
         valid_mask: list[int] = []
+        alive_mask: list[int] = []
+        alive_k = max(1, int(config.alive_k_frames))
+        base = 8
+        extra = 2 if bool(config.include_age_k) else 0
         for marker_id in range(1, 19):
             tr = tracks.get(marker_id, {})
             valid = bool(tr.get("valid", False)) and tr.get("rvec") is not None and tr.get("tvec") is not None
-            v = np.zeros(8, dtype=np.float32)
-            if valid:
+            has_signal = bool(np.max(np.abs(np.asarray(tr.get("corners_px", np.zeros((4, 2))), dtype=np.float32))) > 1e-6)
+            lost = float(max(0, tr.get("lost_frames", 0)))
+            alive = int((lost <= alive_k) and has_signal)
+            can_emit = valid and (world_valid or not bool(config.require_world_for_pose3d))
+            v = np.zeros(base + extra, dtype=np.float32)
+            if can_emit:
                 T_cam_marker = pose_to_matrix(np.asarray(tr["rvec"]), np.asarray(tr["tvec"]))
                 T_ref = relative_pose(T_cam_marker, T_cam_world) if T_cam_world is not None else T_cam_marker
                 v[0:3] = T_ref[:3, 3]
@@ -526,30 +557,56 @@ def pack_state(
                 valid_mask.append(1)
             else:
                 valid_mask.append(0)
+            if bool(config.include_age_k):
+                k_frames = float(max(1, int(config.alive_k_frames)))
+                if str(config.age_norm_mode) == "frames_norm":
+                    age = min(lost / max(1.0, k_frames), 1.0)
+                    k_val = 1.0
+                else:
+                    age = lost
+                    k_val = k_frames
+                v[8] = float(age)
+                v[9] = float(k_val)
+            alive_mask.append(alive)
             parts.append(v)
         info["world_missing"] = bool(not world_valid)
         info["valid_mask"] = np.asarray(valid_mask, dtype=np.uint8)
+        info["alive_mask"] = np.asarray(alive_mask, dtype=np.uint8)
+        info["track_feature_dim"] = extra
         return np.concatenate(parts, axis=0).astype(np.float32), info
     if mode == "image2d":
         world = tracks.get(0, {})
         world_valid = bool(world.get("valid", False))
         parts = []
         valid_mask = []
+        alive_mask = []
+        lost_max = max(1, int(config.max_lost_frames))
+        alive_k = max(1, int(config.alive_k_frames))
+        track_feat_dim = 2 if bool(config.include_tracking_features) else 0
         for marker_id in range(1, 19):
             tr = tracks.get(marker_id, {})
-            v = np.zeros(3, dtype=np.float32)
+            v = np.zeros(3 + track_feat_dim, dtype=np.float32)
             valid = bool(tr.get("valid", False))
-            if valid:
-                c = np.asarray(tr.get("center_px", np.zeros(2, dtype=np.float32)), dtype=np.float32).reshape(2)
+            c = np.asarray(tr.get("center_px", np.zeros(2, dtype=np.float32)), dtype=np.float32).reshape(2)
+            corners = np.asarray(tr.get("corners_px", np.zeros((4, 2))), dtype=np.float32)
+            has_signal = bool(np.max(np.abs(corners)) > 1e-6)
+            lost = int(max(0, tr.get("lost_frames", lost_max)))
+            alive = int((lost <= alive_k) and has_signal)
+
+            if valid or has_signal:
                 v[0] = float(np.clip(c[0] / max(1.0, float(W)), 0.0, 1.0))
                 v[1] = float(np.clip(c[1] / max(1.0, float(H)), 0.0, 1.0))
-                v[2] = 1.0
-                valid_mask.append(1)
-            else:
-                valid_mask.append(0)
+                v[2] = 1.0 if valid else 0.0
+            if bool(config.include_tracking_features):
+                v[3] = float(np.clip(lost / float(lost_max), 0.0, 1.0))
+                v[4] = float(alive)
+            valid_mask.append(1 if valid else 0)
+            alive_mask.append(alive)
             parts.append(v)
         info["world_missing"] = bool(not world_valid)
         info["valid_mask"] = np.asarray(valid_mask, dtype=np.uint8)
+        info["alive_mask"] = np.asarray(alive_mask, dtype=np.uint8)
+        info["track_feature_dim"] = track_feat_dim
         return np.concatenate(parts, axis=0).astype(np.float32), info
     raise ValueError(f"Unsupported mode: {mode}")
 
@@ -561,27 +618,147 @@ class ArucoPipeline:
         self.config = config
         self.detector = ArucoDetector(config)
         self.tracker = ArucoTracker(config)
-        self.state_dim = 18 * (8 if config.output_mode == "pose3d" else 3)
+        if config.output_mode == "pose3d":
+            base = 8
+            extra = 2 if config.include_age_k else 0
+            per_seg = base + extra
+        else:
+            raise ValueError("Use pose3d only for sim-to-real")
+        self.state_dim = 18 * per_seg
         self._step_count = 0
 
-    def step(self, frame: np.ndarray, timestamp: float | int) -> tuple[np.ndarray, dict[str, Any]]:
+    def step(
+        self,
+        frame: np.ndarray,
+        timestamp: float | int,
+        gt_centers_px: dict[int, np.ndarray] | None = None,
+    ) -> tuple[np.ndarray, dict[str, Any]]:
         self._step_count += 1
         detections_raw = self.detector.detect(frame)
         expected = set(int(x) for x in self.config.expected_ids)
         detections = {mid: det for mid, det in detections_raw.items() if mid in expected}
         unexpected_ids = sorted(int(mid) for mid in detections_raw.keys() if mid not in expected)
         tracks = self.tracker.update(detections, timestamp=timestamp)
-        state_vec, pack_info = pack_state(tracks, mode=self.config.output_mode, frame_shape=frame.shape)
+        world_track = tracks.get(0, {})
+        world_valid = (
+            bool(world_track.get("valid", False))
+            and world_track.get("rvec") is not None
+            and world_track.get("tvec") is not None
+        )
+        world_pose = (
+            pose_to_matrix(np.asarray(world_track["rvec"]), np.asarray(world_track["tvec"])) if world_valid else None
+        )
+        state_vec, pack_info = pack_state(
+            tracks,
+            world_pose=world_pose,
+            mode=self.config.output_mode,
+            frame_shape=frame.shape,
+            config=self.config,
+        )
         detected_ids = sorted(int(mid) for mid in detections.keys())
-        seg_expected = [mid for mid in self.config.expected_ids if int(mid) != 0]
+        seg_expected = [int(mid) for mid in self.config.expected_ids if int(mid) != 0]
         missing_ids = [mid for mid in seg_expected if mid not in detected_ids]
-        reproj_errs = [float(d["reprojection_error"]) for d in detections.values() if d.get("reprojection_error") is not None]
-        mean_reproj = float(np.mean(reproj_errs)) if reproj_errs else float("nan")
+        if self.config.output_mode == "pose3d":
+            reproj_errs = [
+                float(d["reprojection_error"]) for d in detections.values() if d.get("reprojection_error") is not None
+            ]
+            mean_reproj = float(np.mean(reproj_errs)) if reproj_errs else float("nan")
+        else:
+            mean_reproj = float("nan")
+
+        seg_ids = list(range(1, 19))
+        detected_seg_mask = np.zeros((18,), dtype=np.uint8)
+        for i, mid in enumerate(seg_ids):
+            if mid in detections:
+                detected_seg_mask[i] = 1
+        det_recall_18 = float(np.mean(detected_seg_mask))
+
+        matched_ids = [mid for mid in seg_ids if mid in detections]
+        track_consistency_mae_px = float("nan")
+        track_consistency_rmse_px = float("nan")
+        track_num = 0
+        if matched_ids:
+            abs_errs = []
+            sq_errs = []
+            for mid in matched_ids:
+                c_det = np.asarray(detections[mid]["center_px"], dtype=np.float32).reshape(2)
+                c_trk = np.asarray(tracks[mid]["center_px"], dtype=np.float32).reshape(2)
+                d = c_det - c_trk
+                abs_errs.append(np.abs(d))
+                sq_errs.append(float(np.sum(d * d)))
+                track_num += 1
+            track_consistency_mae_px = float(np.mean(np.concatenate(abs_errs))) if abs_errs else float("nan")
+            track_consistency_rmse_px = float(np.sqrt(np.mean(sq_errs))) if sq_errs else float("nan")
+
+        gate_rejected_mask = np.zeros((18,), dtype=np.uint8)
+        for i, mid in enumerate(seg_ids):
+            tr = tracks.get(mid)
+            if tr is None:
+                continue
+            if bool(tr.get("gate_rejected", False)):
+                gate_rejected_mask[i] = 1
+        det_count = int(np.sum(detected_seg_mask))
+        gate_reject_rate_on_detected = float(np.sum(gate_rejected_mask) / max(1, det_count))
+
+        # Alive means not too stale for control, not internal max_lost bookkeeping.
+        alive_k = max(1, int(self.config.alive_k_frames))
+        track_alive_mask = np.zeros((18,), dtype=np.uint8)
+        for i, mid in enumerate(seg_ids):
+            tr = tracks.get(mid)
+            if tr is None:
+                continue
+            lost = int(tr.get("lost_frames", alive_k + 999))
+            corners = np.asarray(tr.get("corners_px", np.zeros((4, 2))), dtype=np.float32)
+            has_signal = bool(np.max(np.abs(corners)) > 1e-6)
+            if lost <= alive_k and has_signal:
+                track_alive_mask[i] = 1
+        track_alive_recall_18 = float(np.mean(track_alive_mask))
+
+        gt_mae_px = float("nan")
+        gt_rmse_px = float("nan")
+        gt_per_id_l2 = np.full((18,), np.nan, dtype=np.float32)
+        gt_num_visible = 0
+        gt_num_matched = 0
+        if gt_centers_px is not None:
+            for i, mid in enumerate(seg_ids):
+                if mid not in gt_centers_px:
+                    continue
+                gt_num_visible += 1
+                if mid in detections:
+                    c_det = np.asarray(detections[mid]["center_px"], dtype=np.float32).reshape(2)
+                    c_gt = np.asarray(gt_centers_px[mid], dtype=np.float32).reshape(2)
+                    d = c_det - c_gt
+                    gt_per_id_l2[i] = float(np.sqrt(np.sum(d * d)))
+                    gt_num_matched += 1
+
+            valid = gt_per_id_l2[~np.isnan(gt_per_id_l2)]
+            if valid.size > 0:
+                gt_mae_px = float(np.mean(valid))
+                gt_rmse_px = float(np.sqrt(np.mean(valid * valid)))
+
+        gt_recall = float(gt_num_matched / max(1, gt_num_visible))
         info: dict[str, Any] = {
             "detected_ids": detected_ids,
             "missing_ids": missing_ids,
             "valid_mask": pack_info.get("valid_mask", np.zeros(18, dtype=np.uint8)),
+            "detected_seg_mask": detected_seg_mask,
+            "det_recall_18": det_recall_18,
             "mean_reprojection_error": mean_reproj,
+            "track_consistency_mae_px": track_consistency_mae_px,
+            "track_consistency_rmse_px": track_consistency_rmse_px,
+            "num_track_consistency_ids": track_num,
+            "gate_rejected_mask": gate_rejected_mask,
+            "gate_reject_rate_on_detected": gate_reject_rate_on_detected,
+            "track_alive_mask": track_alive_mask,
+            "track_alive_recall_18": track_alive_recall_18,
+            "alive_k_frames": int(alive_k),
+            "gt_mae_px": gt_mae_px,
+            "gt_rmse_px": gt_rmse_px,
+            "gt_per_id_l2_px": gt_per_id_l2,
+            "gt_num_visible": gt_num_visible,
+            "gt_num_matched": gt_num_matched,
+            "gt_recall": gt_recall,
+            "num_gt_error_ids": gt_num_matched,
             "world_missing": bool(pack_info.get("world_missing", True)),
             "num_detected": len(detected_ids),
             "num_missing": len(missing_ids),
@@ -623,6 +800,7 @@ def make_camera_matrix_from_fovy(width: int, height: int, fovy_deg: float) -> np
     """
     Build pinhole intrinsics from vertical FOV and render resolution.
     dist_coeffs for MuJoCo can usually be zeros.
+    For real cameras use calibrated intrinsics/distortion instead of this helper.
     """
     h = float(height)
     w = float(width)

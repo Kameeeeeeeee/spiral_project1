@@ -21,13 +21,70 @@ from vision_defaults import CAMERA_DISTANCE_SCALE, CAMERA_LOOKAT_OFFSET, CAMERA_
 # Keeping variable for compatibility. Demo now uses SpiralEnv camera path.
 PATH_TO_XML = Path("./assets/spiral_scene.xml")
 CAMERA_NAME = "top"
-RENDER_SIZE = 1024
-N_STEPS = 64
+RENDER_SIZE = 1200
+N_STEPS = 128
 SAVE_DEBUG_IMAGES = True
 ACTION_FREQ_HZ = 0.55
 ACTION_NOISE_STD = 0.12
 ACTION_GAIN = 0.9
-USE_POSE3D = False
+USE_POSE3D = True
+CALIBRATION_NPZ = Path("./assets/camera_calibration_top.npz")
+
+
+def _build_marker_geom_ids(model: mujoco.MjModel) -> dict[int, int]:
+    out: dict[int, int] = {}
+    for marker_id in range(19):
+        name = f"aruco_marker_{marker_id:02d}"
+        gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
+        if gid >= 0:
+            out[marker_id] = int(gid)
+    return out
+
+
+def _extract_gt_centers_px(env: SpiralEnv, marker_geom_ids: dict[int, int]) -> dict[int, np.ndarray]:
+    """
+    Compute per-marker GT centers in pixel space from segmentation render.
+    """
+    gt: dict[int, np.ndarray] = {}
+    renderer = getattr(env, "_renderer", None)
+    if renderer is None:
+        return gt
+    if not hasattr(renderer, "enable_segmentation_rendering"):
+        return gt
+    try:
+        renderer.enable_segmentation_rendering()
+        seg = renderer.render()
+    except Exception:
+        try:
+            renderer.disable_segmentation_rendering()
+        except Exception:
+            pass
+        return gt
+    finally:
+        try:
+            renderer.disable_segmentation_rendering()
+        except Exception:
+            pass
+
+    if seg is None or seg.ndim != 3 or seg.shape[2] < 2:
+        return gt
+
+    ch0 = seg[:, :, 0].astype(np.int32, copy=False)
+    ch1 = seg[:, :, 1].astype(np.int32, copy=False)
+    geom_type = int(mujoco.mjtObj.mjOBJ_GEOM)
+
+    for marker_id, gid in marker_geom_ids.items():
+        # MuJoCo Python may encode (objid, objtype) or swapped channels depending on version.
+        mask_a = (ch0 == gid) & (ch1 == geom_type)
+        mask_b = (ch1 == gid) & (ch0 == geom_type)
+        mask = mask_a | mask_b
+        ys, xs = np.nonzero(mask)
+        if xs.size == 0:
+            continue
+        cx = float(np.mean(xs))
+        cy = float(np.mean(ys))
+        gt[marker_id] = np.array([cx, cy], dtype=np.float32)
+    return gt
 
 
 def _draw_debug(frame: np.ndarray, info: dict[str, Any]) -> np.ndarray:
@@ -83,6 +140,18 @@ def _demo_action(step_idx: int, dt: float, rng: np.random.Generator) -> np.ndarr
     return np.clip(a, -1.0, 1.0).astype(np.float32)
 
 
+def _load_camera_calibration_npz(path: Path) -> tuple[np.ndarray, np.ndarray] | None:
+    if not path.exists():
+        return None
+    try:
+        data = np.load(path)
+        K = np.asarray(data["camera_matrix"], dtype=np.float32).reshape(3, 3)
+        D = np.asarray(data["dist_coeffs"], dtype=np.float32).reshape(-1, 1)
+        return K, D
+    except Exception:
+        return None
+
+
 def main() -> None:
     xml = deb.build_mjcf()
     model_tmp = mujoco.MjModel.from_xml_string(xml)
@@ -105,23 +174,40 @@ def main() -> None:
     )
     env = SpiralEnv(render_mode=None, cfg=cfg)
     env.reset()
-
-    ar_cfg = ArucoConfig(
-        dict_name="DICT_4X4_50",
-        marker_length_m=float(deb.marker_length_m),
-        output_mode="pose3d" if USE_POSE3D else "image2d",
-        expected_ids=list(range(19)),
-        input_color="RGB",
-        useRefineDetectedMarkers=False,
-        enable_kalman=True,
-        camera_matrix=make_camera_matrix_from_fovy(
+    marker_geom_ids = _build_marker_geom_ids(env.model)
+    calib = _load_camera_calibration_npz(CALIBRATION_NPZ) if USE_POSE3D else None
+    if USE_POSE3D and calib is not None:
+        camera_matrix, dist_coeffs = calib
+        calib_src = f"npz:{CALIBRATION_NPZ}"
+    elif USE_POSE3D:
+        camera_matrix = make_camera_matrix_from_fovy(
             width=safe_size,
             height=safe_size,
             fovy_deg=float(deb.CAM_TOP_FOVY),
         )
-        if USE_POSE3D
-        else None,
-        dist_coeffs=np.zeros((5, 1), dtype=np.float32) if USE_POSE3D else None,
+        dist_coeffs = np.zeros((5, 1), dtype=np.float32)
+        calib_src = "fovy_fallback"
+    else:
+        camera_matrix = None
+        dist_coeffs = None
+        calib_src = "disabled"
+
+    ar_cfg = ArucoConfig(
+        dict_name="DICT_4X4_50",
+        marker_length_m=float(deb.marker_length_m),
+        marker_length_per_id=dict(getattr(deb, "MARKER_LENGTH_PER_ID", {})),
+        output_mode="pose3d",
+        expected_ids=list(range(19)),
+        input_color="RGB",
+        useRefineDetectedMarkers=True,
+        enable_kalman=True,
+        camera_matrix=camera_matrix,
+        dist_coeffs=dist_coeffs,
+        include_tracking_features=True,
+        alive_k_frames=3,
+        include_age_k=True,
+        age_norm_mode="frames_norm",
+        require_world_for_pose3d=True,
     )
     pipeline = ArucoPipeline(ar_cfg)
     rng = np.random.default_rng(123)
@@ -137,7 +223,9 @@ def main() -> None:
         action = _demo_action(step_idx, cfg.control_dt, rng)
         env.step(action)
         frame = _to_uint8_rgb(env.render_camera())
-        state_vec, info = pipeline.step(frame, timestamp=step_idx)
+        gt_centers_px = _extract_gt_centers_px(env, marker_geom_ids)
+        timestamp_s = float(step_idx) * float(cfg.control_dt)
+        state_vec, info = pipeline.step(frame, timestamp=timestamp_s, gt_centers_px=gt_centers_px)
         detected_counts.append(int(info.get("num_detected", 0)))
         last_state = state_vec
         last_info = info
@@ -158,13 +246,25 @@ def main() -> None:
         return
 
     print("=== ArUco Demo Summary ===")
+    print(f"mode: {'pose3d' if USE_POSE3D else 'image2d'}")
+    print(f"camera_calibration_source: {calib_src}")
     print(f"detected_ids: {last_info['detected_ids']}")
     print(f"missing_ids:  {last_info['missing_ids']}")
     print(f"state_vec shape: {tuple(last_state.shape)}")
-    if last_state.size >= 3:
-        print(f"segment_01 state head: {last_state[:8].tolist()}")
+    if USE_POSE3D and last_state.size >= 10:
+        print(f"segment_01 state head: {last_state[:10].tolist()}")
+    elif last_state.size >= 5:
+        print(f"segment_01 state head: {last_state[:5].tolist()}")
     print(f"world_missing: {last_info.get('world_missing', True)}")
     print(f"mean_reprojection_error: {last_info.get('mean_reprojection_error')}")
+    print(f"track_consistency_mae_px: {last_info.get('track_consistency_mae_px')}")
+    print(f"track_consistency_rmse_px: {last_info.get('track_consistency_rmse_px')}")
+    print(f"det_recall_18: {last_info.get('det_recall_18')}")
+    print(f"gate_reject_rate_on_detected: {last_info.get('gate_reject_rate_on_detected')}")
+    print(f"track_alive_recall_18: {last_info.get('track_alive_recall_18')} (alive_k={last_info.get('alive_k_frames')})")
+    print(f"gt_mae_px: {last_info.get('gt_mae_px')}")
+    print(f"gt_rmse_px: {last_info.get('gt_rmse_px')}")
+    print(f"gt_recall: {last_info.get('gt_recall')}")
     print(f"last_frame_mean_intensity: {float(np.mean(frame)):.3f}")
     if detected_counts:
         print(f"detected_ids_avg: {float(np.mean(detected_counts)):.2f}")

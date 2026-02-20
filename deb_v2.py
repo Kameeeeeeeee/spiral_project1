@@ -75,6 +75,27 @@ CAM_TOP_POS = (0.0, 0.0, 0.35)
 CAM_TOP_XYAXES = "1 0 0 0 -1 0"
 CAM_TOP_FOVY = 60.0
 marker_length_m = 0.004
+MARKER_LENGTH_PER_ID = {
+    0:  0.008,  # world marker on seg_00
+    1:  0.008,
+    2:  0.008,
+    3:  0.008,
+    4:  0.008,
+    5:  0.008,
+    6:  0.008,
+    7:  0.006,
+    8:  0.006,
+    9:  0.006,
+    10: 0.006,
+    11: 0.006,
+    12: 0.006,
+    13: 0.006,
+    14: 0.004,
+    15: 0.004,
+    16: 0.004,
+    17: 0.004,
+    18: 0.004,
+}
 MARKER_THICKNESS_M = 0.0006
 MARKER_SURFACE_CLEARANCE_M = 0.0002
 MARKER_EULER = "0 0 0"
@@ -378,9 +399,10 @@ def build_mjcf() -> str:
             f"friction=\"{friction_i}\" solimp=\"{SOLIMP}\" solref=\"{SOLREF}\" "
             f"margin=\"{_fmt(MARGIN)}\" gap=\"{_fmt(GAP)}\"/>"
         )
+        marker_length_i = float(MARKER_LENGTH_PER_ID.get(i, marker_length_m))
         body_lines.append(
             f"{indent * (i + 1)}<geom name=\"aruco_marker_{i:02d}\" type=\"box\" "
-            f"size=\"{_fmt(0.5 * marker_length_m)} {_fmt(0.5 * marker_length_m)} {_fmt(0.5 * MARKER_THICKNESS_M)}\" "
+            f"size=\"{_fmt(0.5 * marker_length_i)} {_fmt(0.5 * marker_length_i)} {_fmt(0.5 * MARKER_THICKNESS_M)}\" "
             f"pos=\"{_fmt(marker_center_x)} {_fmt(marker_center_y)} {_fmt(marker_center_z)}\" "
             f"euler=\"{MARKER_EULER}\" material=\"aruco_mat_{i:02d}\" "
             f"contype=\"0\" conaffinity=\"0\" mass=\"0\"/>"

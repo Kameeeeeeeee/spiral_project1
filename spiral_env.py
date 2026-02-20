@@ -38,6 +38,10 @@ class EnvCfg:
     aruco_render_height: int = 480
     aruco_camera_matrix: np.ndarray | None = None
     aruco_dist_coeffs: np.ndarray | None = None
+    aruco_include_tracking_features: bool = True
+    aruco_alive_k_frames: int = 3
+    aruco_require_world_marker: bool = True
+    aruco_visual_randomization: bool = True
 
     action_mode: str = "delta"  # "delta" or "absolute"
     dmax_per_step: float = 8.0  # N change per control step for delta mode
@@ -254,6 +258,13 @@ class SpiralEnv(gym.Env):
         self._aruco_pipeline: ArucoPipeline | None = None
         self._aruco_state_dim = 0
         self._last_aruco_info: dict[str, Any] = {}
+        self._aruco_visual_randomization = bool(self.cfg.aruco_visual_randomization)
+        self._aruco_noise_std_max = 8.0
+        self._aruco_brightness_jitter = 0.30
+        self._aruco_contrast_jitter = 0.30
+        self._aruco_shift_px_max = 6.0
+        self._aruco_motion_blur_prob = 0.50
+        self._aruco_occlusion_prob = 0.35
 
         if self._use_aruco_obs:
             output_mode = str(self.cfg.aruco_output_mode).lower()
@@ -270,6 +281,9 @@ class SpiralEnv(gym.Env):
                 camera_matrix=self.cfg.aruco_camera_matrix,
                 dist_coeffs=self.cfg.aruco_dist_coeffs,
                 input_color="RGB",
+                include_tracking_features=bool(self.cfg.aruco_include_tracking_features),
+                alive_k_frames=int(self.cfg.aruco_alive_k_frames),
+                require_world_for_pose3d=bool(self.cfg.aruco_require_world_marker),
             )
             try:
                 self._aruco_pipeline = ArucoPipeline(ar_cfg)
@@ -578,9 +592,73 @@ class SpiralEnv(gym.Env):
         # ArUco detection must run on full render resolution, no downscale in pipeline.
         self._aruco_renderer.update_scene(self.data, camera=self.cfg.aruco_camera_name)
         frame = self._aruco_renderer.render()
+        frame = self._augment_aruco_frame(frame)
         state_vec, info = self._aruco_pipeline.step(frame, timestamp=float(self.data.time))
         self._last_aruco_info = info
         return state_vec.astype(np.float32, copy=False)
+
+    def _augment_aruco_frame(self, img: np.ndarray) -> np.ndarray:
+        if not self._aruco_visual_randomization or self._dr_strength <= 0.0:
+            return img
+        arr = img.astype(np.float32, copy=False)
+        strength = self._dr_strength
+        brightness = deb._u(
+            self.runtime_rng,
+            1.0 - self._aruco_brightness_jitter * strength,
+            1.0 + self._aruco_brightness_jitter * strength,
+        )
+        contrast = deb._u(
+            self.runtime_rng,
+            1.0 - self._aruco_contrast_jitter * strength,
+            1.0 + self._aruco_contrast_jitter * strength,
+        )
+        arr = (arr - 127.5) * contrast + 127.5 * brightness
+        noise_std = self._aruco_noise_std_max * strength
+        if noise_std > 0.0:
+            arr = arr + self.runtime_rng.normal(0.0, noise_std, size=arr.shape)
+
+        if self.runtime_rng.random() < self._aruco_motion_blur_prob * strength:
+            k = int(3 + 2 * int(np.clip(np.round(3.0 * strength), 0.0, 3.0)))
+            k = max(3, min(k, 9))
+            kernel = np.zeros((k, k), dtype=np.float32)
+            if self.runtime_rng.random() < 0.5:
+                kernel[k // 2, :] = 1.0
+            else:
+                kernel[:, k // 2] = 1.0
+            kernel /= float(np.sum(kernel))
+            arr = self._motion_blur_conv(arr, kernel)
+
+        if self.runtime_rng.random() < self._aruco_occlusion_prob * strength:
+            h, w = int(arr.shape[0]), int(arr.shape[1])
+            occ_w = int(max(8, w * deb._u(self.runtime_rng, 0.05, 0.20) * strength))
+            occ_h = int(max(8, h * deb._u(self.runtime_rng, 0.05, 0.20) * strength))
+            x0 = int(self.runtime_rng.integers(0, max(1, w - occ_w)))
+            y0 = int(self.runtime_rng.integers(0, max(1, h - occ_h)))
+            arr[y0 : y0 + occ_h, x0 : x0 + occ_w, :] = self.runtime_rng.uniform(0.0, 255.0)
+
+        shift_max = int(max(0, round(self._aruco_shift_px_max * strength)))
+        if shift_max > 0:
+            sx = int(self.runtime_rng.integers(-shift_max, shift_max + 1))
+            sy = int(self.runtime_rng.integers(-shift_max, shift_max + 1))
+            if sx != 0 or sy != 0:
+                arr = np.roll(arr, shift=(sy, sx), axis=(0, 1))
+                if sy > 0:
+                    arr[:sy, :, :] = 0.0
+                elif sy < 0:
+                    arr[sy:, :, :] = 0.0
+                if sx > 0:
+                    arr[:, :sx, :] = 0.0
+                elif sx < 0:
+                    arr[:, sx:, :] = 0.0
+
+        return np.clip(arr, 0.0, 255.0).astype(np.uint8)
+
+    def _motion_blur_conv(self, arr: np.ndarray, kernel: np.ndarray) -> np.ndarray:
+        try:
+            import cv2  # type: ignore
+            return cv2.filter2D(arr, -1, kernel)
+        except Exception:
+            return arr
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         super().reset(seed=seed)
