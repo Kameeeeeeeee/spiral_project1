@@ -467,7 +467,7 @@ def build_mjcf() -> str:
     <camera name=\"{CAM_TOP_NAME}\" pos=\"{_fmt(CAM_TOP_POS[0])} {_fmt(CAM_TOP_POS[1])} {_fmt(CAM_TOP_POS[2])}\" xyaxes=\"{CAM_TOP_XYAXES}\" fovy=\"{_fmt(CAM_TOP_FOVY)}\"/>
     <geom name=\"floor\" type=\"plane\" pos=\"0 0 {_fmt(FLOOR_Z)}\" size=\"1 1 0.1\"
           friction=\"{FLOOR_FRICTION}\" solimp=\"{SOLIMP}\" solref=\"{SOLREF}\"
-          contype=\"1\" conaffinity=\"1\" condim=\"6\" rgba=\"0.2 0.2 0.2 1\"/>
+          contype=\"1\" conaffinity=\"1\" condim=\"6\" rgba=\"1 0.6 0.8 1\"/>
     <body name=\"ball\" pos=\"{_fmt(ball_x)} {_fmt(ball_y)} {_fmt(ball_z)}\">
       <joint name=\"ball_slide_x\" type=\"slide\" axis=\"1 0 0\" damping=\"0.25\" frictionloss=\"0.015\"/>
       <joint name=\"ball_slide_y\" type=\"slide\" axis=\"0 1 0\" damping=\"0.25\" frictionloss=\"0.015\"/>

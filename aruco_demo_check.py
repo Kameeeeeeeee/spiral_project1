@@ -21,7 +21,7 @@ from vision_defaults import CAMERA_DISTANCE_SCALE, CAMERA_LOOKAT_OFFSET, CAMERA_
 # Keeping variable for compatibility. Demo now uses SpiralEnv camera path.
 PATH_TO_XML = Path("./assets/spiral_scene.xml")
 CAMERA_NAME = "top"
-RENDER_SIZE = 1200
+RENDER_SIZE = 2048
 N_STEPS = 128
 SAVE_DEBUG_IMAGES = True
 ACTION_FREQ_HZ = 0.55
