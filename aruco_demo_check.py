@@ -10,8 +10,8 @@ from typing import Any
 
 import numpy as np
 
-import deb_v2 as deb
 from aruco_pipeline import ArucoConfig, ArucoPipeline, make_camera_matrix_from_fovy
+from marker_defaults import CAM_TOP_FOVY, MARKER_LENGTH_M, MARKER_LENGTH_PER_ID
 
 
 DATASET_DIR = Path("./assets/dataset/aruco")
@@ -94,7 +94,7 @@ def main() -> None:
         camera_matrix = make_camera_matrix_from_fovy(
             width=w,
             height=h,
-            fovy_deg=float(deb.CAM_TOP_FOVY),
+            fovy_deg=float(CAM_TOP_FOVY),
         )
         dist_coeffs = np.zeros((5, 1), dtype=np.float32)
         calib_src = "fovy_fallback"
@@ -105,8 +105,8 @@ def main() -> None:
 
     ar_cfg = ArucoConfig(
         dict_name="DICT_4X4_50",
-        marker_length_m=float(deb.marker_length_m),
-        marker_length_per_id=dict(getattr(deb, "MARKER_LENGTH_PER_ID", {})),
+        marker_length_m=float(MARKER_LENGTH_M),
+        marker_length_per_id=dict(MARKER_LENGTH_PER_ID),
         output_mode="pose3d",
         expected_ids=list(range(19)),
         input_color="RGB",

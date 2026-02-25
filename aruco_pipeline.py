@@ -3,8 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-import mujoco
 import numpy as np
+try:
+    import mujoco  # type: ignore
+except Exception:
+    mujoco = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -779,6 +782,8 @@ def render_rgb(
     """
     Offscreen RGB render helper for MuJoCo.
     """
+    if mujoco is None:
+        raise RuntimeError("MuJoCo is required for render_rgb, but it is not installed.")
     cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
     if cam_id < 0:
         raise ValueError(f"Camera not found: {camera_name}")
