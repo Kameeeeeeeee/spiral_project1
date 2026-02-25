@@ -221,7 +221,7 @@ class ForceController:
     cable_bias: float = CABLE_BIAS
 
 
-def build_mjcf() -> str:
+def build_mjcf(marker_family: str = "aruco") -> str:
     if trimesh is None:
         raise SystemExit("ERROR: trimesh is not installed. Install with: pip install trimesh")
 
@@ -229,20 +229,31 @@ def build_mjcf() -> str:
 
     base_dir = Path(__file__).resolve().parent
     stl_dir = base_dir / "assets" / "spiral_tent_stls_vir"
-    aruco_dir = base_dir / "assets" / "Aruco4x4"
+    family = str(marker_family).strip().lower()
+    if family not in {"aruco", "apriltag"}:
+        raise SystemExit(f"ERROR: Unsupported marker_family '{marker_family}'. Use 'aruco' or 'apriltag'.")
+
+    marker_dir = base_dir / "assets" / ("Aruco4x4" if family == "aruco" else "AprilTag36h11")
+    if family == "aruco":
+        marker_file_pattern = "aruco_4x4_id_{:02d}.png"
+        marker_name_prefix = "aruco"
+    else:
+        marker_file_pattern = "tag36h11_id_{:02d}.png"
+        marker_name_prefix = "apriltag"
+
     if not stl_dir.is_dir():
         raise SystemExit(f"ERROR: STL directory not found: {stl_dir}")
-    if not aruco_dir.is_dir():
-        raise SystemExit(f"ERROR: ArUco directory not found: {aruco_dir}")
+    if not marker_dir.is_dir():
+        raise SystemExit(f"ERROR: Marker directory not found: {marker_dir}")
 
     stl_paths = [stl_dir / f"seg_{i:02d}.stl" for i in range(N_SEGMENTS)]
     for path in stl_paths:
         if not path.exists():
             raise SystemExit(f"ERROR: Missing STL file: {path}")
-    marker_img_paths = [aruco_dir / f"aruco_4x4_id_{i:02d}.png" for i in range(N_SEGMENTS)]
+    marker_img_paths = [marker_dir / marker_file_pattern.format(i) for i in range(N_SEGMENTS)]
     for path in marker_img_paths:
         if not path.exists():
-            raise SystemExit(f"ERROR: Missing ArUco marker image: {path}")
+            raise SystemExit(f"ERROR: Missing marker image ({family}): {path}")
 
     seg_info = []
     measured_length = 0.0
@@ -318,10 +329,10 @@ def build_mjcf() -> str:
     for i in range(N_SEGMENTS):
         marker_file = Path(_windows_short_path(marker_img_paths[i])).as_posix()
         marker_asset_lines.append(
-            f'<texture name="aruco_tex_{i:02d}" type="2d" file="{marker_file}"/>'
+            f'<texture name="{marker_name_prefix}_tex_{i:02d}" type="2d" file="{marker_file}"/>'
         )
         marker_asset_lines.append(
-            f'<material name="aruco_mat_{i:02d}" texture="aruco_tex_{i:02d}" '
+            f'<material name="{marker_name_prefix}_mat_{i:02d}" texture="{marker_name_prefix}_tex_{i:02d}" '
             f'rgba="1 1 1 1" specular="0.02" shininess="0.01" reflectance="0"/>'
         )
 
@@ -401,10 +412,10 @@ def build_mjcf() -> str:
         )
         marker_length_i = float(MARKER_LENGTH_PER_ID.get(i, marker_length_m))
         body_lines.append(
-            f"{indent * (i + 1)}<geom name=\"aruco_marker_{i:02d}\" type=\"box\" "
+            f"{indent * (i + 1)}<geom name=\"{marker_name_prefix}_marker_{i:02d}\" type=\"box\" "
             f"size=\"{_fmt(0.5 * marker_length_i)} {_fmt(0.5 * marker_length_i)} {_fmt(0.5 * MARKER_THICKNESS_M)}\" "
             f"pos=\"{_fmt(marker_center_x)} {_fmt(marker_center_y)} {_fmt(marker_center_z)}\" "
-            f"euler=\"{MARKER_EULER}\" material=\"aruco_mat_{i:02d}\" "
+            f"euler=\"{MARKER_EULER}\" material=\"{marker_name_prefix}_mat_{i:02d}\" "
             f"contype=\"0\" conaffinity=\"0\" mass=\"0\"/>"
         )
         body_lines.append(f"{indent * (i + 1)}<site name=\"site_L_{i:02d}\" pos=\"{site_pos_l}\"/>")
