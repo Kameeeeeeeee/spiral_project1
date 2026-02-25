@@ -221,7 +221,7 @@ class ForceController:
     cable_bias: float = CABLE_BIAS
 
 
-def build_mjcf(marker_family: str = "aruco") -> str:
+def build_mjcf(marker_family: str = "apriltag") -> str:
     if trimesh is None:
         raise SystemExit("ERROR: trimesh is not installed. Install with: pip install trimesh")
 
