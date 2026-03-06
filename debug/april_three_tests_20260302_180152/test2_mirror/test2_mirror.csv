@@ -1,0 +1,4 @@
+variant,raw_count,raw_ids,raw_margin_min,raw_margin_mean,default_count,default_ids,relaxed_count,relaxed_ids
+original,19,0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18,74.0678939819336,88.91784145957546,18,0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17,19,0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18
+fliplr,0,,0.0,0.0,0,,0,
+flipud,0,,0.0,0.0,0,,0,

@@ -1,0 +1,125 @@
+{
+  "output_dir": "C:/Users/mikha/OneDrive/Документы/GitHub/spiral_project1/debug/april_three_tests_20260302_180152",
+  "default_thresholds": {
+    "min_decision_margin": 8.0,
+    "min_detection_score": 0.22,
+    "max_reprojection_error_px": 3.0,
+    "min_side_px": 7.0,
+    "min_square_ratio": 0.6
+  },
+  "relaxed_thresholds": {
+    "min_decision_margin": 0.0,
+    "min_detection_score": 0.0,
+    "max_reprojection_error_px": 1000000000.0,
+    "min_side_px": 0.0,
+    "min_square_ratio": 0.0
+  },
+  "test1_rotation": {
+    "source_path": "assets/AprilTag36h11/tag36h11_id_00.png",
+    "rows": [
+      {
+        "variant": "original",
+        "raw_count": 1,
+        "raw_ids": "0",
+        "raw_margin_min": 120.0,
+        "raw_margin_mean": 120.0,
+        "default_count": 1,
+        "default_ids": "0",
+        "relaxed_count": 1,
+        "relaxed_ids": "0"
+      },
+      {
+        "variant": "rot90_k1",
+        "raw_count": 1,
+        "raw_ids": "0",
+        "raw_margin_min": 120.0,
+        "raw_margin_mean": 120.0,
+        "default_count": 1,
+        "default_ids": "0",
+        "relaxed_count": 1,
+        "relaxed_ids": "0"
+      },
+      {
+        "variant": "rot90_k2",
+        "raw_count": 1,
+        "raw_ids": "0",
+        "raw_margin_min": 120.0,
+        "raw_margin_mean": 120.0,
+        "default_count": 1,
+        "default_ids": "0",
+        "relaxed_count": 1,
+        "relaxed_ids": "0"
+      },
+      {
+        "variant": "rot90_k3",
+        "raw_count": 1,
+        "raw_ids": "0",
+        "raw_margin_min": 120.0,
+        "raw_margin_mean": 120.0,
+        "default_count": 1,
+        "default_ids": "0",
+        "relaxed_count": 1,
+        "relaxed_ids": "0"
+      }
+    ],
+    "csv_path": "C:/Users/mikha/OneDrive/Документы/GitHub/spiral_project1/debug/april_three_tests_20260302_180152/test1_rotation/test1_rotation.csv"
+  },
+  "test2_mirror": {
+    "chosen_frame_path": "debug/input_FOR_APRILTAG/input_gray_000119.png",
+    "rows": [
+      {
+        "variant": "original",
+        "raw_count": 19,
+        "raw_ids": "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18",
+        "raw_margin_min": 74.0678939819336,
+        "raw_margin_mean": 88.91784145957546,
+        "default_count": 18,
+        "default_ids": "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17",
+        "relaxed_count": 19,
+        "relaxed_ids": "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18"
+      },
+      {
+        "variant": "fliplr",
+        "raw_count": 0,
+        "raw_ids": "",
+        "raw_margin_min": 0.0,
+        "raw_margin_mean": 0.0,
+        "default_count": 0,
+        "default_ids": "",
+        "relaxed_count": 0,
+        "relaxed_ids": ""
+      },
+      {
+        "variant": "flipud",
+        "raw_count": 0,
+        "raw_ids": "",
+        "raw_margin_min": 0.0,
+        "raw_margin_mean": 0.0,
+        "default_count": 0,
+        "default_ids": "",
+        "relaxed_count": 0,
+        "relaxed_ids": ""
+      }
+    ],
+    "csv_path": "C:/Users/mikha/OneDrive/Документы/GitHub/spiral_project1/debug/april_three_tests_20260302_180152/test2_mirror/test2_mirror.csv",
+    "scan_csv_path": "C:/Users/mikha/OneDrive/Документы/GitHub/spiral_project1/debug/april_three_tests_20260302_180152/test2_mirror/test2_problem_scan.csv"
+  },
+  "test3_filters": {
+    "inputs_count": 200,
+    "frames_with_gain": 9,
+    "frames_with_gain_ratio": 0.045,
+    "default_count_mean": 18.954999923706055,
+    "relaxed_count_mean": 19.0,
+    "default_count_min": 18,
+    "relaxed_count_min": 19,
+    "total_gained_observations": 9,
+    "max_gained_in_one_frame": 1,
+    "gained_ids_global": [
+      16,
+      17,
+      18
+    ],
+    "csv_path": "C:/Users/mikha/OneDrive/Документы/GitHub/spiral_project1/debug/april_three_tests_20260302_180152/test3_filters/test3_filters_per_frame.csv",
+    "gain_frames_dir": "C:/Users/mikha/OneDrive/Документы/GitHub/spiral_project1/debug/april_three_tests_20260302_180152/test3_filters/frames_with_gain"
+  }
+}

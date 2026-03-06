@@ -1,0 +1,34 @@
+{
+  "dataset_dir": "C:/Users/mikha/OneDrive/Документы/GitHub/spiral_project1/assets/dataset/apriltag",
+  "gt_path": "C:/Users/mikha/OneDrive/Документы/GitHub/spiral_project1/assets/dataset/apriltag/segments_gt.jsonl",
+  "frames_total": 200,
+  "frames_with_recovery": 9,
+  "total_recovered_missing_ids": 9,
+  "improved_recall_frames": 9,
+  "improved_mae_frames": 3,
+  "base_metrics_mean": {
+    "det_recall_18": 0.9975,
+    "gt_mae_px": 554.0616333164642,
+    "gt_rmse_px": 576.337102233514,
+    "gt_recall": 0.9975,
+    "track_consistency_mae_px": 102.10573746204376,
+    "track_consistency_rmse_px": 176.8319351640353,
+    "gate_reject_rate_on_detected": 0.42281045751633983,
+    "track_alive_recall_18": 1.0,
+    "mean_reprojection_error": 0.039782341009912035
+  },
+  "recovered_metrics_mean": {
+    "det_recall_18": 1.0,
+    "gt_mae_px": 554.0505503439202,
+    "gt_rmse_px": 576.2929158179643,
+    "gt_recall": 1.0
+  },
+  "paths": {
+    "per_frame_csv": "C:/Users/mikha/OneDrive/Документы/GitHub/spiral_project1/debug/april_fabrik_eval_20260306_153244/per_frame_metrics.csv",
+    "examples_dir": "C:/Users/mikha/OneDrive/Документы/GitHub/spiral_project1/debug/april_fabrik_eval_20260306_153244/recovered_examples",
+    "overlay_frames_dir": "C:/Users/mikha/OneDrive/Документы/GitHub/spiral_project1/debug/april_fabrik_eval_20260306_153244/april_plus_fabrik_frames"
+  },
+  "warnings": [
+    "GT pixel projection mismatch detected: large direct GT-vs-detector error (~110.8px) but tiny affine residual (~0.07px). Regenerate dataset annotations with fixed make_dataset.py."
+  ]
+}

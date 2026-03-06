@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
@@ -30,6 +31,10 @@ class AprilConfig:
     quad_sigma: float = 0.0
     refine_edges: bool = True
     decode_sharpening: float = 0.25
+    # Debug: save grayscale image that is passed into pupil_apriltags detector.
+    debug_save_detector_input: bool = False
+    debug_detector_input_dir: str = "./debug/input_FOR_APRILTAG"
+    debug_detector_input_prefix: str = "input_gray"
 
     # Geometric and quality filtering.
     min_side_px: float = 7.0
@@ -67,6 +72,12 @@ class AprilTagDetector:
         self.config = config
         self._cv2 = self._import_cv2()
         self._detector = self._import_detector()
+        self._debug_input_counter = 0
+        self._debug_input_dir: Path | None = None
+        if bool(self.config.debug_save_detector_input):
+            out_dir = Path(str(self.config.debug_detector_input_dir))
+            out_dir.mkdir(parents=True, exist_ok=True)
+            self._debug_input_dir = out_dir
 
     @staticmethod
     def _import_cv2():
@@ -109,6 +120,15 @@ class AprilTagDetector:
         if self.config.input_color.upper() == "RGB":
             return self._cv2.cvtColor(frame_u8, self._cv2.COLOR_RGB2GRAY)
         return self._cv2.cvtColor(frame_u8, self._cv2.COLOR_BGR2GRAY)
+
+    def _save_detector_input(self, gray: np.ndarray) -> None:
+        if self._debug_input_dir is None:
+            return
+        out_path = self._debug_input_dir / (
+            f"{self.config.debug_detector_input_prefix}_{self._debug_input_counter:06d}.png"
+        )
+        self._cv2.imwrite(str(out_path), gray)
+        self._debug_input_counter += 1
 
     @staticmethod
     def _order_corners_tl_tr_br_bl(corners_px: np.ndarray) -> np.ndarray:
@@ -169,6 +189,7 @@ class AprilTagDetector:
 
     def detect(self, frame: np.ndarray) -> dict[int, dict[str, Any]]:
         gray = self._to_gray(frame)
+        self._save_detector_input(gray)
         tags = self._detector.detect(gray, estimate_tag_pose=False)
 
         merged: dict[int, dict[str, Any]] = {}

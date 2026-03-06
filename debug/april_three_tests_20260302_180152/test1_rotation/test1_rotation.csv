@@ -1,0 +1,5 @@
+variant,raw_count,raw_ids,raw_margin_min,raw_margin_mean,default_count,default_ids,relaxed_count,relaxed_ids
+original,1,0,120.0,120.0,1,0,1,0
+rot90_k1,1,0,120.0,120.0,1,0,1,0
+rot90_k2,1,0,120.0,120.0,1,0,1,0
+rot90_k3,1,0,120.0,120.0,1,0,1,0

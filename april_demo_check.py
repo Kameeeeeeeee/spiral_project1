@@ -120,6 +120,9 @@ def main() -> None:
         include_age_k=True,
         age_norm_mode="frames_norm",
         require_world_for_pose3d=True,
+        debug_save_detector_input=True,
+        debug_detector_input_dir="./debug/input_FOR_APRILTAG",
+        debug_detector_input_prefix="input_gray",
     )
     pipeline = AprilPipeline(ar_cfg)
 
